@@ -1611,7 +1611,7 @@ static InstructionsState getSameOpcode(ArrayRef<Value *> VL,
           return InstructionsState::invalid();
       } else if (auto *LI = dyn_cast<LoadInst>(I)) {
         auto *BaseLI = cast<LoadInst>(MainOp);
-        if (!LI->isSimple() || !BaseLI->isSimple())
+        if (!LI->isReorderable() || !BaseLI->isReorderable())
           return InstructionsState::invalid();
       } else if (auto *Call = dyn_cast<CallInst>(I)) {
         auto *CallBase = cast<CallInst>(MainOp);
@@ -1708,12 +1708,12 @@ static MemoryLocation getLocation(Instruction *I) {
   return MemoryLocation();
 }
 
-/// \returns True if the instruction is not a volatile or atomic load/store.
-static bool isSimple(Instruction *I) {
+/// \returns True if the instruction is not a volatile or ordered atomic load/store.
+static bool isReorderable(Instruction *I) {
   if (LoadInst *LI = dyn_cast<LoadInst>(I))
-    return LI->isSimple();
+    return LI->isReorderable();
   if (StoreInst *SI = dyn_cast<StoreInst>(I))
-    return SI->isSimple();
+    return SI->isReorderable();
   if (MemIntrinsic *MI = dyn_cast<MemIntrinsic>(I))
     return !MI->isVolatile();
   return true;
@@ -2408,8 +2408,8 @@ public:
       auto *LI1 = dyn_cast<LoadInst>(V1);
       auto *LI2 = dyn_cast<LoadInst>(V2);
       if (LI1 && LI2) {
-        if (LI1->getParent() != LI2->getParent() || !LI1->isSimple() ||
-            !LI2->isSimple())
+        if (LI1->getParent() != LI2->getParent() || !LI1->isReorderable() ||
+            !LI2->isReorderable())
           return CheckSameEntryOrFail();
 
         std::optional<int64_t> Dist = getPointersDiff(
@@ -4579,7 +4579,7 @@ private:
   /// is invariant in the calling loop.
   bool isAliased(const MemoryLocation &Loc1, Instruction *Inst1,
                  Instruction *Inst2) {
-    assert(Loc1.Ptr && isSimple(Inst1) && "Expected simple first instruction.");
+    assert(Loc1.Ptr && isReorderable(Inst1) && "Expected reorderable first instruction.");
     // First check if the result is already in the cache.
     AliasCacheKey Key = std::make_pair(Inst1, Inst2);
     auto Res = AliasCache.try_emplace(Key);
@@ -6904,14 +6904,14 @@ BoUpSLP::LoadsState BoUpSLP::canVectorizeLoads(
     return LoadsState::Gather;
 
   // Make sure all loads in the bundle are simple - we can't vectorize
-  // atomic or volatile loads.
+  // any volatile loads, or atomic loads that are ordered.
   PointerOps.clear();
   const size_t Sz = VL.size();
   PointerOps.resize(Sz);
   auto *POIter = PointerOps.begin();
   for (Value *V : VL) {
     auto *L = dyn_cast<LoadInst>(V);
-    if (!L || !L->isSimple())
+    if (!L || !L->isReorderable())
       return LoadsState::Gather;
     *POIter = L->getPointerOperand();
     ++POIter;
@@ -7310,7 +7310,7 @@ BoUpSLP::findPartiallyOrderedLoads(const BoUpSLP::TreeEntry &TE) {
   BBs.reserve(TE.Scalars.size());
   for (Value *V : TE.Scalars) {
     auto *L = dyn_cast<LoadInst>(V);
-    if (!L || !L->isSimple())
+    if (!L || !L->isReorderable())
       return std::nullopt;
     Ptrs.push_back(L->getPointerOperand());
     BBs.push_back(L->getParent());
@@ -8813,7 +8813,7 @@ BoUpSLP::collectUserStores(const BoUpSLP::TreeEntry *TE) const {
       auto *SI = dyn_cast<StoreInst>(U);
       // Test whether we can handle the store. V might be a global, which could
       // be used in a different function.
-      if (SI == nullptr || !SI->isSimple() || SI->getFunction() != F ||
+      if (SI == nullptr || !SI->isReorderable() || SI->getFunction() != F ||
           !isValidElementType(SI->getValueOperand()->getType()))
         continue;
       // Skip entry if already
@@ -8973,7 +8973,7 @@ static void gatherPossiblyVectorizableLoads(
     auto *LI = dyn_cast<LoadInst>(V);
     if (!LI)
       continue;
-    if (R.isDeleted(LI) || R.isVectorized(LI) || !LI->isSimple())
+    if (R.isDeleted(LI) || R.isVectorized(LI) || !LI->isReorderable())
       continue;
     bool IsFound = false;
     for (auto [Map, Data] : zip(ClusteredDistToLoad, ClusteredLoads)) {
@@ -9584,7 +9584,7 @@ static std::pair<size_t, size_t> generateKeySubkey(
   // Sort the loads by the distance between the pointers.
   if (auto *LI = dyn_cast<LoadInst>(V)) {
     Key = hash_combine(LI->getType(), hash_value(Instruction::Load), Key);
-    if (LI->isSimple())
+    if (LI->isReorderable())
       SubKey = hash_value(LoadsSubkeyGenerator(Key, LI));
     else
       Key = SubKey = hash_value(LI);
@@ -9977,7 +9977,7 @@ BoUpSLP::TreeEntry::EntryState BoUpSLP::getScalarsVectorizationState(
         LLVM_DEBUG(dbgs() << "SLP: Gathering loads of non-packed type.\n");
       else if (any_of(VL, [](Value *V) {
                  auto *LI = dyn_cast<LoadInst>(V);
-                 return !LI || !LI->isSimple();
+                 return !LI || !LI->isReorderable();
                }))
         LLVM_DEBUG(dbgs() << "SLP: Gathering non-simple loads.\n");
       else
@@ -10120,8 +10120,8 @@ BoUpSLP::TreeEntry::EntryState BoUpSLP::getScalarsVectorizationState(
     // atomic or volatile stores.
     for (Value *V : VL) {
       auto *SI = cast<StoreInst>(V);
-      if (!SI->isSimple()) {
-        LLVM_DEBUG(dbgs() << "SLP: Gathering non-simple stores.\n");
+      if (!SI->isReorderable()) {
+        LLVM_DEBUG(dbgs() << "SLP: Gathering non-reorderable stores.\n");
         return TreeEntry::NeedToGather;
       }
       PointerOps.push_back(SI->getPointerOperand());
@@ -11914,7 +11914,7 @@ bool BoUpSLP::canReuseExtract(ArrayRef<Value *> VL,
       return false;
     // Check if load can be rewritten as load of vector.
     LoadInst *LI = dyn_cast<LoadInst>(Vec);
-    if (!LI || !LI->isSimple() || !LI->hasNUses(VL.size()))
+    if (!LI || !LI->isReorderable() || !LI->hasNUses(VL.size()))
       return false;
   } else {
     NElts = cast<FixedVectorType>(Vec->getType())->getNumElements();
@@ -13221,7 +13221,7 @@ void BoUpSLP::transformNodes() {
         auto *LI = dyn_cast<LoadInst>(V);
         if (!LI)
           continue;
-        if (isDeleted(LI) || isVectorized(LI) || !LI->isSimple())
+        if (isDeleted(LI) || isVectorized(LI) || !LI->isReorderable())
           continue;
         gatherPossiblyVectorizableLoads(
             *this, V, *DL, *SE, *TTI,
@@ -16999,7 +16999,7 @@ BoUpSLP::isGatherShuffledSingleRegisterEntry(
     auto *I = dyn_cast<Instruction>(V);
     return I && !IsSplatOrUndefs && !isVectorized(I) &&
            !isVectorLikeInstWithConstOps(I) &&
-           !areAllUsersVectorized(I, UserIgnoreList) && isSimple(I);
+           !areAllUsersVectorized(I, UserIgnoreList) && isReorderable(I);
   };
   // Check that the neighbor instruction may form a full vector node with the
   // current instruction V. It is possible, if they have same/alternate opcode
@@ -21404,7 +21404,7 @@ void BoUpSLP::BlockScheduling::calculateDependencies(
     bool SrcMayWrite = SrcInst->mayWriteToMemory();
     unsigned NumAliased = 0;
     unsigned DistToSrc = 1;
-    bool IsNonSimpleSrc = !SrcLoc.Ptr || !isSimple(SrcInst);
+    bool IsNonSimpleSrc = !SrcLoc.Ptr || !isReorderable(SrcInst);
 
     for (ScheduleData *DepDest = NextLoadStore; DepDest;
          DepDest = DepDest->getNextLoadStore()) {
@@ -23241,7 +23241,7 @@ void SLPVectorizerPass::collectSeedInstructions(BasicBlock *BB) {
     // Ignore store instructions that are volatile or have a pointer operand
     // that doesn't point to a scalar type.
     if (auto *SI = dyn_cast<StoreInst>(&I)) {
-      if (!SI->isSimple())
+      if (!SI->isReorderable())
         continue;
       if (!isValidElementType(SI->getValueOperand()->getType()))
         continue;

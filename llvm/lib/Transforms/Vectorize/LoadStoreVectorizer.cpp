@@ -1434,6 +1434,8 @@ Vectorizer::collectEquivalenceClasses(BasicBlock::iterator Begin,
                                       BasicBlock::iterator End) {
   EquivalenceClassMap Ret;
 
+  fprintf(stderr, "LoadStoreVectorizer\n");
+
   auto GetUnderlyingObject = [](const Value *Ptr) -> const Value * {
     const Value *ObjPtr = llvm::getUnderlyingObject(Ptr);
     if (const auto *Sel = dyn_cast<SelectInst>(ObjPtr)) {

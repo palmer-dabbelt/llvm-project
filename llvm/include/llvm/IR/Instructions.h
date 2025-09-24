@@ -256,6 +256,13 @@ public:
            !isVolatile();
   }
 
+  bool isReorderable() const {
+     return (getOrdering() == AtomicOrdering::NotAtomic ||
+            getOrdering() == AtomicOrdering::Unordered ||
+            getOrdering() == AtomicOrdering::Monotonic) &&
+           !isVolatile();
+ }
+
   Value *getPointerOperand() { return getOperand(0); }
   const Value *getPointerOperand() const { return getOperand(0); }
   static unsigned getPointerOperandIndex() { return 0U; }
@@ -379,6 +386,13 @@ public:
             getOrdering() == AtomicOrdering::Unordered) &&
            !isVolatile();
   }
+
+  bool isReorderable() const {
+     return (getOrdering() == AtomicOrdering::NotAtomic ||
+            getOrdering() == AtomicOrdering::Unordered ||
+            getOrdering() == AtomicOrdering::Monotonic) &&
+           !isVolatile();
+ }
 
   Value *getValueOperand() { return getOperand(0); }
   const Value *getValueOperand() const { return getOperand(0); }
