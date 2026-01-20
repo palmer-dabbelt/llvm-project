@@ -1,0 +1,171 @@
+//===-- Opcodes.cpp - Python Opcode Implementation ------------*- C++ -*-===//
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//===----------------------------------------------------------------------===//
+
+#include "plang/Bytecode/Opcodes.h"
+
+using namespace plang;
+
+llvm::StringRef plang::getOpcodeName(Opcode Op) {
+  switch (Op) {
+#define OPCODE_CASE(name)                                                      \
+  case Opcode::name:                                                           \
+    return #name;
+    OPCODE_CASE(CACHE)
+    OPCODE_CASE(POP_TOP)
+    OPCODE_CASE(PUSH_NULL)
+    OPCODE_CASE(INTERPRETER_EXIT)
+    OPCODE_CASE(END_FOR)
+    OPCODE_CASE(END_SEND)
+    OPCODE_CASE(NOP)
+    OPCODE_CASE(UNARY_NEGATIVE)
+    OPCODE_CASE(UNARY_NOT)
+    OPCODE_CASE(UNARY_INVERT)
+    OPCODE_CASE(BINARY_SUBSCR)
+    OPCODE_CASE(GET_LEN)
+    OPCODE_CASE(MATCH_MAPPING)
+    OPCODE_CASE(MATCH_SEQUENCE)
+    OPCODE_CASE(MATCH_KEYS)
+    OPCODE_CASE(PUSH_EXC_INFO)
+    OPCODE_CASE(CHECK_EXC_MATCH)
+    OPCODE_CASE(CHECK_EG_MATCH)
+    OPCODE_CASE(WITH_EXCEPT_START)
+    OPCODE_CASE(GET_AITER)
+    OPCODE_CASE(GET_ANEXT)
+    OPCODE_CASE(BEFORE_ASYNC_WITH)
+    OPCODE_CASE(BEFORE_WITH)
+    OPCODE_CASE(END_ASYNC_FOR)
+    OPCODE_CASE(STORE_SUBSCR)
+    OPCODE_CASE(DELETE_SUBSCR)
+    OPCODE_CASE(GET_ITER)
+    OPCODE_CASE(GET_YIELD_FROM_ITER)
+    OPCODE_CASE(LOAD_BUILD_CLASS)
+    OPCODE_CASE(LOAD_ASSERTION_ERROR)
+    OPCODE_CASE(RETURN_GENERATOR)
+    OPCODE_CASE(RETURN_VALUE)
+    OPCODE_CASE(SETUP_ANNOTATIONS)
+    OPCODE_CASE(LOAD_LOCALS)
+    OPCODE_CASE(POP_EXCEPT)
+    OPCODE_CASE(STORE_NAME)
+    OPCODE_CASE(DELETE_NAME)
+    OPCODE_CASE(UNPACK_SEQUENCE)
+    OPCODE_CASE(FOR_ITER)
+    OPCODE_CASE(UNPACK_EX)
+    OPCODE_CASE(STORE_ATTR)
+    OPCODE_CASE(DELETE_ATTR)
+    OPCODE_CASE(STORE_GLOBAL)
+    OPCODE_CASE(DELETE_GLOBAL)
+    OPCODE_CASE(SWAP)
+    OPCODE_CASE(LOAD_CONST)
+    OPCODE_CASE(LOAD_NAME)
+    OPCODE_CASE(BUILD_TUPLE)
+    OPCODE_CASE(BUILD_LIST)
+    OPCODE_CASE(BUILD_SET)
+    OPCODE_CASE(BUILD_MAP)
+    OPCODE_CASE(LOAD_ATTR)
+    OPCODE_CASE(COMPARE_OP)
+    OPCODE_CASE(IMPORT_NAME)
+    OPCODE_CASE(IMPORT_FROM)
+    OPCODE_CASE(JUMP_FORWARD)
+    OPCODE_CASE(POP_JUMP_IF_FALSE)
+    OPCODE_CASE(POP_JUMP_IF_TRUE)
+    OPCODE_CASE(LOAD_GLOBAL)
+    OPCODE_CASE(IS_OP)
+    OPCODE_CASE(CONTAINS_OP)
+    OPCODE_CASE(RERAISE)
+    OPCODE_CASE(COPY)
+    OPCODE_CASE(RETURN_CONST)
+    OPCODE_CASE(BINARY_OP)
+    OPCODE_CASE(SEND)
+    OPCODE_CASE(LOAD_FAST)
+    OPCODE_CASE(STORE_FAST)
+    OPCODE_CASE(DELETE_FAST)
+    OPCODE_CASE(LOAD_FAST_CHECK)
+    OPCODE_CASE(POP_JUMP_IF_NOT_NONE)
+    OPCODE_CASE(POP_JUMP_IF_NONE)
+    OPCODE_CASE(RAISE_VARARGS)
+    OPCODE_CASE(GET_AWAITABLE)
+    OPCODE_CASE(MAKE_FUNCTION)
+    OPCODE_CASE(BUILD_SLICE)
+    OPCODE_CASE(JUMP_BACKWARD_NO_INTERRUPT)
+    OPCODE_CASE(MAKE_CELL)
+    OPCODE_CASE(LOAD_CLOSURE)
+    OPCODE_CASE(LOAD_DEREF)
+    OPCODE_CASE(STORE_DEREF)
+    OPCODE_CASE(DELETE_DEREF)
+    OPCODE_CASE(JUMP_BACKWARD)
+    OPCODE_CASE(LOAD_SUPER_ATTR)
+    OPCODE_CASE(CALL_FUNCTION_EX)
+    OPCODE_CASE(LOAD_FAST_AND_CLEAR)
+    OPCODE_CASE(EXTENDED_ARG)
+    OPCODE_CASE(LIST_APPEND)
+    OPCODE_CASE(SET_ADD)
+    OPCODE_CASE(MAP_ADD)
+    OPCODE_CASE(COPY_FREE_VARS)
+    OPCODE_CASE(YIELD_VALUE)
+    OPCODE_CASE(RESUME)
+    OPCODE_CASE(MATCH_CLASS)
+    OPCODE_CASE(FORMAT_VALUE)
+    OPCODE_CASE(BUILD_CONST_KEY_MAP)
+    OPCODE_CASE(BUILD_STRING)
+    OPCODE_CASE(LIST_EXTEND)
+    OPCODE_CASE(SET_UPDATE)
+    OPCODE_CASE(DICT_MERGE)
+    OPCODE_CASE(DICT_UPDATE)
+    OPCODE_CASE(CALL)
+    OPCODE_CASE(KW_NAMES)
+    OPCODE_CASE(CALL_INTRINSIC_1)
+    OPCODE_CASE(CALL_INTRINSIC_2)
+    OPCODE_CASE(LOAD_FROM_DICT_OR_GLOBALS)
+    OPCODE_CASE(LOAD_FROM_DICT_OR_DEREF)
+    OPCODE_CASE(INVALID)
+#undef OPCODE_CASE
+  default:
+    return "UNKNOWN";
+  }
+}
+
+unsigned plang::getOpcodeArgCount(Opcode Op) {
+  // Python 3.12+ uses word-aligned instructions (2 bytes each)
+  // All instructions have an argument byte, but not all use it
+  return opcodeHasArg(Op) ? 1 : 0;
+}
+
+bool plang::opcodeHasArg(Opcode Op) {
+  // In Python 3.12+, opcodes >= 90 have arguments
+  return static_cast<uint8_t>(Op) >= 90;
+}
+
+bool plang::opcodeIsJump(Opcode Op) {
+  switch (Op) {
+  case Opcode::JUMP_FORWARD:
+  case Opcode::JUMP_BACKWARD:
+  case Opcode::JUMP_BACKWARD_NO_INTERRUPT:
+  case Opcode::POP_JUMP_IF_FALSE:
+  case Opcode::POP_JUMP_IF_TRUE:
+  case Opcode::POP_JUMP_IF_NONE:
+  case Opcode::POP_JUMP_IF_NOT_NONE:
+  case Opcode::FOR_ITER:
+  case Opcode::SEND:
+    return true;
+  default:
+    return false;
+  }
+}
+
+bool plang::opcodeIsRelativeJump(Opcode Op) {
+  switch (Op) {
+  case Opcode::JUMP_FORWARD:
+  case Opcode::JUMP_BACKWARD:
+  case Opcode::JUMP_BACKWARD_NO_INTERRUPT:
+  case Opcode::FOR_ITER:
+  case Opcode::SEND:
+    return true;
+  default:
+    return false;
+  }
+}
