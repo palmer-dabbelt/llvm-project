@@ -15,6 +15,7 @@
 #include "llvm/IR/Verifier.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
+#include <set>
 
 using namespace plang;
 using namespace llvm;
@@ -87,6 +88,13 @@ BytecodeCompiler::compile(const CodeObject &Code, StringRef ModuleName) {
   State.Function = Func;
   State.EntryBB = EntryBB;
 
+  // Allocate runtime stack
+  size_t StackSize = std::max(static_cast<size_t>(Code.StackSize), size_t{16});
+  State.StackArrayTy = ArrayType::get(getPyValuePtrTy(), StackSize);
+  State.StackBase = Builder->CreateAlloca(State.StackArrayTy, nullptr, "stack");
+  State.StackPtr = Builder->CreateAlloca(Type::getInt64Ty(Ctx), nullptr, "sp");
+  Builder->CreateStore(ConstantInt::get(Type::getInt64Ty(Ctx), 0), State.StackPtr);
+
   // Pre-load constants as LLVM values
   // For strings, we need to register them with the runtime
   auto *RegisterStringFn = M->getFunction("plang_register_string");
@@ -145,12 +153,57 @@ BytecodeCompiler::compile(const CodeObject &Code, StringRef ModuleName) {
     State.Locals.push_back(Alloca);
   }
 
+  // Allocate storage for module-level names
+  for (size_t i = 0; i < Code.Names.size(); ++i) {
+    auto *Alloca = Builder->CreateAlloca(getPyValuePtrTy(), nullptr,
+                                          "name_" + Code.Names[i]);
+    Builder->CreateStore(ConstantInt::get(getPyValuePtrTy(), 0), Alloca);
+    State.Names.push_back(Alloca);
+  }
+
   // Parse and compile instructions
   auto InstructionsOrErr = Code.parseInstructions();
   if (!InstructionsOrErr)
     return InstructionsOrErr.takeError();
 
-  for (const auto &Inst : *InstructionsOrErr) {
+  auto &Instructions = *InstructionsOrErr;
+
+  // Pre-scan for jump targets and create basic blocks
+  std::set<uint32_t> JumpTargetOffsets;
+  for (const auto &Inst : Instructions) {
+    if (opcodeIsJump(Inst.Op)) {
+      uint32_t TargetOffset = 0;
+      if (Inst.Op == Opcode::JUMP_BACKWARD ||
+          Inst.Op == Opcode::JUMP_BACKWARD_NO_INTERRUPT) {
+        // Backward jumps: target = current offset + 2 - arg * 2
+        // (relative to end of instruction)
+        TargetOffset = Inst.Offset + 2 - Inst.Arg * 2;
+      } else {
+        // Forward jumps: target = current offset + arg * 2 + 2 (after this instruction)
+        TargetOffset = Inst.Offset + Inst.Arg * 2 + 2;
+      }
+      JumpTargetOffsets.insert(TargetOffset);
+    }
+  }
+
+  // Create basic blocks for jump targets
+  for (uint32_t Offset : JumpTargetOffsets) {
+    State.JumpTargets[Offset] =
+        BasicBlock::Create(Ctx, "bb_" + std::to_string(Offset), Func);
+  }
+
+  // Compile instructions
+  for (const auto &Inst : Instructions) {
+    // Check if this instruction is a jump target - if so, switch to its block
+    if (State.JumpTargets.count(Inst.Offset)) {
+      BasicBlock *TargetBB = State.JumpTargets[Inst.Offset];
+      // If current block doesn't have a terminator, add branch to target
+      if (!Builder->GetInsertBlock()->getTerminator()) {
+        Builder->CreateBr(TargetBB);
+      }
+      Builder->SetInsertPoint(TargetBB);
+    }
+
     if (auto Err = compileInstruction(Inst, State, Code))
       return std::move(Err);
   }
@@ -170,6 +223,52 @@ BytecodeCompiler::compile(const CodeObject &Code, StringRef ModuleName) {
   return M;
 }
 
+void BytecodeCompiler::emitPush(CompilerState &State, Value *V) {
+  // Load current SP
+  Value *SP = Builder->CreateLoad(Type::getInt64Ty(Ctx), State.StackPtr, "sp_val");
+  // GEP into stack array at SP
+  Value *Addr = Builder->CreateGEP(
+      State.StackArrayTy, State.StackBase,
+      {ConstantInt::get(Type::getInt64Ty(Ctx), 0), SP}, "stack_addr");
+  // Store value
+  Builder->CreateStore(V, Addr);
+  // Increment SP
+  Value *NewSP = Builder->CreateAdd(SP, ConstantInt::get(Type::getInt64Ty(Ctx), 1), "sp_inc");
+  Builder->CreateStore(NewSP, State.StackPtr);
+}
+
+Value *BytecodeCompiler::emitPop(CompilerState &State) {
+  // Load current SP
+  Value *SP = Builder->CreateLoad(Type::getInt64Ty(Ctx), State.StackPtr, "sp_val");
+  // Decrement SP
+  Value *NewSP = Builder->CreateSub(SP, ConstantInt::get(Type::getInt64Ty(Ctx), 1), "sp_dec");
+  Builder->CreateStore(NewSP, State.StackPtr);
+  // GEP into stack array at new SP and load
+  Value *Addr = Builder->CreateGEP(
+      State.StackArrayTy, State.StackBase,
+      {ConstantInt::get(Type::getInt64Ty(Ctx), 0), NewSP}, "stack_addr");
+  return Builder->CreateLoad(getPyValuePtrTy(), Addr, "popped");
+}
+
+Value *BytecodeCompiler::emitPeek(CompilerState &State, unsigned Offset) {
+  // Load SP and compute index: SP - Offset
+  Value *SP = Builder->CreateLoad(Type::getInt64Ty(Ctx), State.StackPtr, "sp_val");
+  Value *Idx = Builder->CreateSub(SP, ConstantInt::get(Type::getInt64Ty(Ctx), Offset), "peek_idx");
+  Value *Addr = Builder->CreateGEP(
+      State.StackArrayTy, State.StackBase,
+      {ConstantInt::get(Type::getInt64Ty(Ctx), 0), Idx}, "peek_addr");
+  return Builder->CreateLoad(getPyValuePtrTy(), Addr, "peeked");
+}
+
+Value *BytecodeCompiler::emitStackAddr(CompilerState &State, unsigned Offset) {
+  // Load SP and compute index: SP - Offset
+  Value *SP = Builder->CreateLoad(Type::getInt64Ty(Ctx), State.StackPtr, "sp_val");
+  Value *Idx = Builder->CreateSub(SP, ConstantInt::get(Type::getInt64Ty(Ctx), Offset), "stack_idx");
+  return Builder->CreateGEP(
+      State.StackArrayTy, State.StackBase,
+      {ConstantInt::get(Type::getInt64Ty(Ctx), 0), Idx}, "stack_slot_addr");
+}
+
 Error BytecodeCompiler::compileInstruction(const Instruction &Inst,
                                             CompilerState &State,
                                             const CodeObject &Code) {
@@ -186,27 +285,25 @@ Error BytecodeCompiler::compileInstruction(const Instruction &Inst,
 
   case Opcode::PUSH_NULL:
     // Push None onto stack
-    State.push(ConstantInt::get(getPyValuePtrTy(), 0));
+    emitPush(State, ConstantInt::get(getPyValuePtrTy(), 0));
     break;
 
   case Opcode::POP_TOP:
-    if (!State.Stack.empty())
-      State.pop();
+    // Pop and discard top of stack
+    emitPop(State);
     break;
 
   case Opcode::LOAD_CONST: {
     if (Inst.Arg < State.Constants.size()) {
-      State.push(State.Constants[Inst.Arg]);
+      emitPush(State, State.Constants[Inst.Arg]);
     } else {
-      State.push(ConstantInt::get(getPyValuePtrTy(), 0));
+      emitPush(State, ConstantInt::get(getPyValuePtrTy(), 0));
     }
     break;
   }
 
   case Opcode::RETURN_VALUE: {
-    Value *RetVal = State.Stack.empty()
-                        ? ConstantInt::get(getPyValuePtrTy(), 0)
-                        : State.pop();
+    Value *RetVal = emitPop(State);
     Builder->CreateRet(RetVal);
     break;
   }
@@ -222,16 +319,16 @@ Error BytecodeCompiler::compileInstruction(const Instruction &Inst,
   case Opcode::LOAD_FAST: {
     if (Inst.Arg < State.Locals.size()) {
       Value *Val = Builder->CreateLoad(getPyValuePtrTy(), State.Locals[Inst.Arg]);
-      State.push(Val);
+      emitPush(State, Val);
     } else {
-      State.push(ConstantInt::get(getPyValuePtrTy(), 0));
+      emitPush(State, ConstantInt::get(getPyValuePtrTy(), 0));
     }
     break;
   }
 
   case Opcode::STORE_FAST: {
-    if (!State.Stack.empty() && Inst.Arg < State.Locals.size()) {
-      Value *Val = State.pop();
+    if (Inst.Arg < State.Locals.size()) {
+      Value *Val = emitPop(State);
       Builder->CreateStore(Val, State.Locals[Inst.Arg]);
     }
     break;
@@ -239,86 +336,204 @@ Error BytecodeCompiler::compileInstruction(const Instruction &Inst,
 
   case Opcode::BINARY_OP: {
     // Binary operations - Inst.Arg indicates the operation
-    // For now, implement basic integer arithmetic inline
-    if (State.Stack.size() >= 2) {
-      Value *RHS = State.pop();
-      Value *LHS = State.pop();
+    Value *RHS = emitPop(State);
+    Value *LHS = emitPop(State);
 
-      Value *Result = nullptr;
-      switch (Inst.Arg) {
-      case 0: // +
-        Result = Builder->CreateAdd(LHS, RHS, "add");
-        break;
-      case 1: // &
-        Result = Builder->CreateAnd(LHS, RHS, "and");
-        break;
-      case 2: // //
-        Result = Builder->CreateSDiv(LHS, RHS, "floordiv");
-        break;
-      case 3: // <<
-        Result = Builder->CreateShl(LHS, RHS, "shl");
-        break;
-      case 5: // *
-        Result = Builder->CreateMul(LHS, RHS, "mul");
-        break;
-      case 6: // %
-        Result = Builder->CreateSRem(LHS, RHS, "mod");
-        break;
-      case 7: // |
-        Result = Builder->CreateOr(LHS, RHS, "or");
-        break;
-      case 10: // -
-        Result = Builder->CreateSub(LHS, RHS, "sub");
-        break;
-      case 11: // /
-        Result = Builder->CreateSDiv(LHS, RHS, "div");
-        break;
-      case 12: // ^
-        Result = Builder->CreateXor(LHS, RHS, "xor");
-        break;
-      default:
-        // Unsupported binary op, just return LHS
-        Result = LHS;
-        break;
-      }
-      State.push(Result);
+    Value *Result = nullptr;
+    switch (Inst.Arg) {
+    case 0: // +
+      Result = Builder->CreateAdd(LHS, RHS, "add");
+      break;
+    case 1: // &
+      Result = Builder->CreateAnd(LHS, RHS, "and");
+      break;
+    case 2: // //
+      Result = Builder->CreateSDiv(LHS, RHS, "floordiv");
+      break;
+    case 3: // <<
+      Result = Builder->CreateShl(LHS, RHS, "shl");
+      break;
+    case 5: // *
+      Result = Builder->CreateMul(LHS, RHS, "mul");
+      break;
+    case 6: // %
+      Result = Builder->CreateSRem(LHS, RHS, "mod");
+      break;
+    case 7: // |
+      Result = Builder->CreateOr(LHS, RHS, "or");
+      break;
+    case 10: // -
+      Result = Builder->CreateSub(LHS, RHS, "sub");
+      break;
+    case 11: // /
+      Result = Builder->CreateSDiv(LHS, RHS, "div");
+      break;
+    case 12: // ^
+      Result = Builder->CreateXor(LHS, RHS, "xor");
+      break;
+    default:
+      // Unsupported binary op, just return LHS
+      Result = LHS;
+      break;
     }
+    emitPush(State, Result);
     break;
   }
 
   case Opcode::COPY: {
     // Copy the Nth item from the stack to the top
-    if (Inst.Arg > 0 && Inst.Arg <= State.Stack.size()) {
-      size_t idx = State.Stack.size() - Inst.Arg;
-      State.push(State.Stack[idx]);
-    }
+    // COPY 1 copies TOS, COPY 2 copies second from top, etc.
+    Value *Val = emitPeek(State, Inst.Arg);
+    emitPush(State, Val);
     break;
   }
 
   case Opcode::SWAP: {
     // Swap top of stack with the Nth item
-    if (Inst.Arg > 0 && Inst.Arg <= State.Stack.size()) {
-      size_t idx = State.Stack.size() - Inst.Arg;
-      std::swap(State.Stack[idx], State.Stack.back());
-    }
+    // SWAP 2 swaps TOS with second from top
+    Value *TopAddr = emitStackAddr(State, 1);
+    Value *OtherAddr = emitStackAddr(State, Inst.Arg);
+    Value *TopVal = Builder->CreateLoad(getPyValuePtrTy(), TopAddr, "swap_top");
+    Value *OtherVal = Builder->CreateLoad(getPyValuePtrTy(), OtherAddr, "swap_other");
+    Builder->CreateStore(OtherVal, TopAddr);
+    Builder->CreateStore(TopVal, OtherAddr);
     break;
   }
 
   case Opcode::LOAD_NAME: {
     // Load a name from the names table
-    // For now, we only recognize built-in functions
     if (Inst.Arg < Code.Names.size()) {
       const std::string &Name = Code.Names[Inst.Arg];
       if (Name == "print") {
         // Push a magic value representing the print built-in
-        State.push(ConstantInt::get(getPyValuePtrTy(), BUILTIN_PRINT));
+        emitPush(State, ConstantInt::get(getPyValuePtrTy(), BUILTIN_PRINT));
+      } else if (Inst.Arg < State.Names.size()) {
+        // Load from the name slot
+        Value *Val = Builder->CreateLoad(getPyValuePtrTy(), State.Names[Inst.Arg], "name_val");
+        emitPush(State, Val);
       } else {
-        // Unknown name - push 0 for now
-        State.push(ConstantInt::get(getPyValuePtrTy(), 0));
+        emitPush(State, ConstantInt::get(getPyValuePtrTy(), 0));
       }
     } else {
-      State.push(ConstantInt::get(getPyValuePtrTy(), 0));
+      emitPush(State, ConstantInt::get(getPyValuePtrTy(), 0));
     }
+    break;
+  }
+
+  case Opcode::STORE_NAME: {
+    // Store TOS to a name slot
+    if (Inst.Arg < State.Names.size()) {
+      Value *Val = emitPop(State);
+      Builder->CreateStore(Val, State.Names[Inst.Arg]);
+    } else {
+      emitPop(State); // Pop and discard if invalid
+    }
+    break;
+  }
+
+  case Opcode::COMPARE_OP: {
+    // Compare two values
+    // Arg: 0=<, 1=<=, 2=>, 3=>=, 4=!=, 5===
+    // Note: Python 3.12 seems to use different encoding than 3.11
+    Value *RHS = emitPop(State);
+    Value *LHS = emitPop(State);
+    Value *Result = nullptr;
+
+    switch (Inst.Arg) {
+    case 2: // < (mapped from Python's encoding)
+      Result = Builder->CreateICmpSLT(LHS, RHS, "cmp_lt");
+      break;
+    case 26: // <=
+      Result = Builder->CreateICmpSLE(LHS, RHS, "cmp_le");
+      break;
+    case 68: // ==
+      Result = Builder->CreateICmpEQ(LHS, RHS, "cmp_eq");
+      break;
+    case 72: // !=
+      Result = Builder->CreateICmpNE(LHS, RHS, "cmp_ne");
+      break;
+    case 4: // >
+      Result = Builder->CreateICmpSGT(LHS, RHS, "cmp_gt");
+      break;
+    case 94: // >=
+      Result = Builder->CreateICmpSGE(LHS, RHS, "cmp_ge");
+      break;
+    default:
+      // Fallback: treat as less-than
+      Result = Builder->CreateICmpSLT(LHS, RHS, "cmp_default");
+      break;
+    }
+    // Convert i1 to i64 (0 or 1)
+    Value *ResultInt = Builder->CreateZExt(Result, getPyValuePtrTy(), "cmp_result");
+    emitPush(State, ResultInt);
+    break;
+  }
+
+  case Opcode::POP_JUMP_IF_FALSE: {
+    // Pop TOS, if false jump to target
+    Value *Cond = emitPop(State);
+    Value *IsTrue = Builder->CreateICmpNE(Cond, ConstantInt::get(getPyValuePtrTy(), 0), "is_true");
+
+    // Calculate jump target: offset + arg * 2 + 2
+    uint32_t TargetOffset = Inst.Offset + Inst.Arg * 2 + 2;
+
+    BasicBlock *TargetBB = State.JumpTargets.count(TargetOffset)
+                               ? State.JumpTargets[TargetOffset]
+                               : nullptr;
+    if (!TargetBB) {
+      // If target block doesn't exist, create it
+      TargetBB = BasicBlock::Create(Ctx, "jump_target", State.Function);
+      State.JumpTargets[TargetOffset] = TargetBB;
+    }
+
+    // Create fall-through block for true case
+    BasicBlock *FallThrough = BasicBlock::Create(Ctx, "fall_through", State.Function);
+
+    Builder->CreateCondBr(IsTrue, FallThrough, TargetBB);
+    Builder->SetInsertPoint(FallThrough);
+    break;
+  }
+
+  case Opcode::POP_JUMP_IF_TRUE: {
+    // Pop TOS, if true jump to target
+    Value *Cond = emitPop(State);
+    Value *IsTrue = Builder->CreateICmpNE(Cond, ConstantInt::get(getPyValuePtrTy(), 0), "is_true");
+
+    uint32_t TargetOffset = Inst.Offset + Inst.Arg * 2 + 2;
+
+    BasicBlock *TargetBB = State.JumpTargets.count(TargetOffset)
+                               ? State.JumpTargets[TargetOffset]
+                               : nullptr;
+    if (!TargetBB) {
+      TargetBB = BasicBlock::Create(Ctx, "jump_target", State.Function);
+      State.JumpTargets[TargetOffset] = TargetBB;
+    }
+
+    BasicBlock *FallThrough = BasicBlock::Create(Ctx, "fall_through", State.Function);
+
+    Builder->CreateCondBr(IsTrue, TargetBB, FallThrough);
+    Builder->SetInsertPoint(FallThrough);
+    break;
+  }
+
+  case Opcode::JUMP_BACKWARD:
+  case Opcode::JUMP_BACKWARD_NO_INTERRUPT: {
+    // Unconditional backward jump
+    // Target = offset + 2 - arg * 2 (relative to end of instruction)
+    uint32_t TargetOffset = Inst.Offset + 2 - Inst.Arg * 2;
+
+    BasicBlock *TargetBB = State.JumpTargets.count(TargetOffset)
+                               ? State.JumpTargets[TargetOffset]
+                               : nullptr;
+    if (!TargetBB) {
+      TargetBB = BasicBlock::Create(Ctx, "back_target", State.Function);
+      State.JumpTargets[TargetOffset] = TargetBB;
+    }
+
+    Builder->CreateBr(TargetBB);
+    // Create a dead block for any following instructions
+    BasicBlock *DeadBB = BasicBlock::Create(Ctx, "dead", State.Function);
+    Builder->SetInsertPoint(DeadBB);
     break;
   }
 
@@ -334,39 +549,48 @@ Error BytecodeCompiler::compileInstruction(const Instruction &Inst,
 
     uint32_t ArgCount = Inst.Arg;
 
-    // Pop arguments
+    // Pop arguments (in reverse order, so we reverse after)
     std::vector<Value *> Args;
     for (uint32_t i = 0; i < ArgCount; ++i) {
-      if (!State.Stack.empty())
-        Args.push_back(State.pop());
+      Args.push_back(emitPop(State));
     }
     // Reverse to get correct order
     std::reverse(Args.begin(), Args.end());
 
     // Pop callable
-    Value *Callable = State.Stack.empty()
-                          ? ConstantInt::get(getPyValuePtrTy(), 0)
-                          : State.pop();
+    Value *Callable = emitPop(State);
 
     // Pop the NULL that was pushed by PUSH_NULL
-    if (!State.Stack.empty())
-      State.pop();
+    emitPop(State);
 
-    // Check if this is a known built-in
-    // For now, we'll generate a runtime check for print
-    auto *CallableConst = dyn_cast<ConstantInt>(Callable);
-    if (CallableConst && CallableConst->getSExtValue() == BUILTIN_PRINT) {
-      // Call plang_print with the first argument
-      if (!Args.empty()) {
-        auto *PrintFn = Builder->GetInsertBlock()->getModule()->getFunction("plang_print");
-        Builder->CreateCall(PrintFn->getFunctionType(), PrintFn, {Args[0]});
-      }
-      // print() returns None (0)
-      State.push(ConstantInt::get(getPyValuePtrTy(), 0));
-    } else {
-      // Unknown callable - push None
-      State.push(ConstantInt::get(getPyValuePtrTy(), 0));
+    // Generate runtime check for print built-in
+    // Compare callable to BUILTIN_PRINT constant
+    Value *IsPrint = Builder->CreateICmpEQ(
+        Callable, ConstantInt::get(getPyValuePtrTy(), BUILTIN_PRINT), "is_print");
+
+    // Create basic blocks for conditional execution
+    Function *F = Builder->GetInsertBlock()->getParent();
+    BasicBlock *PrintBB = BasicBlock::Create(Ctx, "call_print", F);
+    BasicBlock *UnknownBB = BasicBlock::Create(Ctx, "call_unknown", F);
+    BasicBlock *ContBB = BasicBlock::Create(Ctx, "call_cont", F);
+
+    Builder->CreateCondBr(IsPrint, PrintBB, UnknownBB);
+
+    // Print branch: call plang_print
+    Builder->SetInsertPoint(PrintBB);
+    if (!Args.empty()) {
+      auto *PrintFn = Builder->GetInsertBlock()->getModule()->getFunction("plang_print");
+      Builder->CreateCall(PrintFn->getFunctionType(), PrintFn, {Args[0]});
     }
+    Builder->CreateBr(ContBB);
+
+    // Unknown callable branch: do nothing
+    Builder->SetInsertPoint(UnknownBB);
+    Builder->CreateBr(ContBB);
+
+    // Continuation: push result (None/0) for both paths
+    Builder->SetInsertPoint(ContBB);
+    emitPush(State, ConstantInt::get(getPyValuePtrTy(), 0));
     break;
   }
 

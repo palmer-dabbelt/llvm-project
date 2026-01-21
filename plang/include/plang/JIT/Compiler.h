@@ -19,6 +19,7 @@
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Support/Error.h"
+#include <map>
 #include <memory>
 
 namespace plang {
@@ -49,21 +50,23 @@ private:
   llvm::Type *getDoubleTy();
   llvm::Type *getPyValuePtrTy();
 
-  // Value stack operations during compilation
+  // Compiler state during bytecode compilation
   struct CompilerState {
     llvm::Function *Function = nullptr;
     llvm::BasicBlock *EntryBB = nullptr;
-    std::vector<llvm::Value *> Stack;
-    std::vector<llvm::Value *> Locals;
-    std::vector<llvm::Value *> Constants;
 
-    void push(llvm::Value *V) { Stack.push_back(V); }
-    llvm::Value *pop() {
-      llvm::Value *V = Stack.back();
-      Stack.pop_back();
-      return V;
-    }
-    llvm::Value *top() const { return Stack.back(); }
+    // Runtime stack (alloca'd at function entry)
+    llvm::Value *StackBase = nullptr;   // Pointer to [N x i64] array
+    llvm::Value *StackPtr = nullptr;    // Pointer to i64 stack index
+    llvm::ArrayType *StackArrayTy = nullptr; // Type for GEP operations
+
+    // Compile-time arrays (values known at compile time)
+    std::vector<llvm::Value *> Locals;    // Pointers to local variable slots
+    std::vector<llvm::Value *> Constants; // Pre-computed constant values
+    std::vector<llvm::Value *> Names;     // Pointers to module-level name slots
+
+    // Jump target basic blocks (offset -> BasicBlock)
+    std::map<uint32_t, llvm::BasicBlock *> JumpTargets;
   };
 
   /// Compile a single instruction
@@ -72,6 +75,12 @@ private:
 
   /// Create runtime helper declarations
   void declareRuntimeHelpers(llvm::Module &M);
+
+  // Runtime stack operations - emit IR for stack manipulation
+  void emitPush(CompilerState &State, llvm::Value *V);
+  llvm::Value *emitPop(CompilerState &State);
+  llvm::Value *emitPeek(CompilerState &State, unsigned Offset);
+  llvm::Value *emitStackAddr(CompilerState &State, unsigned Offset);
 };
 
 } // namespace plang

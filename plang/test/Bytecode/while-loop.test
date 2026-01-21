@@ -1,0 +1,11 @@
+# Test that we can execute a simple while loop
+#
+# RUN: rm -rf %t && mkdir -p %t
+# RUN: echo 'x = 0' > %t/loop.py
+# RUN: echo 'while x < 3:' >> %t/loop.py
+# RUN: echo '    x = x + 1' >> %t/loop.py
+# RUN: echo 'print(x)' >> %t/loop.py
+# RUN: %python -m compileall -b %t/loop.py
+# RUN: %plang --run %t/loop.pyc | FileCheck %s
+# CHECK: 3
+# CHECK: Result: 0
