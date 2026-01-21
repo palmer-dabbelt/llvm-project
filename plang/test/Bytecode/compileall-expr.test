@@ -1,0 +1,8 @@
+# Test that compileall-compiled module with expression runs successfully
+# In exec mode, expressions are discarded and the module returns None (0)
+#
+# RUN: rm -rf %t && mkdir -p %t
+# RUN: echo "1 + 2 + 3" > %t/expr.py
+# RUN: %python -m compileall -b %t/expr.py
+# RUN: %plang --run %t/expr.pyc | FileCheck %s
+# CHECK: Result: 0

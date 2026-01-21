@@ -1,0 +1,8 @@
+# Test that we can call the print() built-in function
+#
+# RUN: rm -rf %t && mkdir -p %t
+# RUN: echo 'print("hello, world")' > %t/hello.py
+# RUN: %python -m compileall -b %t/hello.py
+# RUN: %plang --run %t/hello.pyc | FileCheck %s
+# CHECK: hello, world
+# CHECK: Result: 0

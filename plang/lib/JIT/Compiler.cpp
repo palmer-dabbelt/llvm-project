@@ -11,8 +11,10 @@
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/GlobalVariable.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Support/raw_ostream.h"
+#include <algorithm>
 
 using namespace plang;
 using namespace llvm;
@@ -36,14 +38,22 @@ std::string BytecodeCompiler::getEntryFunctionName(const CodeObject &Code) {
   return "__plang_" + Code.Name + "__";
 }
 
+// Magic value to represent the built-in print function
+static constexpr int64_t BUILTIN_PRINT = -1000000001;
+
 void BytecodeCompiler::declareRuntimeHelpers(Module &M) {
   // Declare runtime helper functions that will be linked at runtime
-  // For now, we'll implement a minimal set inline
 
-  // plang_print: prints a value (for debugging)
+  // plang_print: prints a value
   auto *PrintTy = FunctionType::get(Type::getVoidTy(Ctx),
                                     {getPyValuePtrTy()}, false);
   M.getOrInsertFunction("plang_print", PrintTy);
+
+  // plang_register_string: registers a string and returns its tagged value
+  auto *RegisterStringTy = FunctionType::get(
+      getPyValuePtrTy(),
+      {PointerType::get(Ctx, 0), Type::getInt64Ty(Ctx)}, false);
+  M.getOrInsertFunction("plang_register_string", RegisterStringTy);
 
   // plang_add: adds two values
   auto *BinaryOpTy = FunctionType::get(getPyValuePtrTy(),
@@ -78,6 +88,10 @@ BytecodeCompiler::compile(const CodeObject &Code, StringRef ModuleName) {
   State.EntryBB = EntryBB;
 
   // Pre-load constants as LLVM values
+  // For strings, we need to register them with the runtime
+  auto *RegisterStringFn = M->getFunction("plang_register_string");
+  size_t StringIndex = 0;
+
   for (const auto &Const : Code.Constants) {
     Value *ConstVal = nullptr;
     switch (Const->getType()) {
@@ -97,6 +111,22 @@ BytecodeCompiler::compile(const CodeObject &Code, StringRef ModuleName) {
       uint64_t bits;
       std::memcpy(&bits, &d, sizeof(bits));
       ConstVal = ConstantInt::get(getPyValuePtrTy(), bits);
+      break;
+    }
+    case PyObject::Type::String: {
+      // Create a global string constant and register it at runtime
+      std::string Str = Const->getString().str();
+      // Create a constant string in the module
+      auto *StrArray = ConstantDataArray::getString(Ctx, Str, true);
+      auto *GV = new GlobalVariable(*M, StrArray->getType(), true,
+                                    GlobalValue::PrivateLinkage, StrArray,
+                                    "str_" + std::to_string(StringIndex++));
+      auto *StrPtr = Builder->CreateBitCast(GV, PointerType::get(Ctx, 0));
+      auto *StrLen = ConstantInt::get(Type::getInt64Ty(Ctx), Str.size());
+      Value *StrIdx = Builder->CreateCall(RegisterStringFn->getFunctionType(),
+                                          RegisterStringFn, {StrPtr, StrLen});
+      // Convert to tagged string value: -(index + 1)
+      ConstVal = Builder->CreateNeg(Builder->CreateAdd(StrIdx, ConstantInt::get(getPyValuePtrTy(), 1)));
       break;
     }
     default:
@@ -270,6 +300,72 @@ Error BytecodeCompiler::compileInstruction(const Instruction &Inst,
     if (Inst.Arg > 0 && Inst.Arg <= State.Stack.size()) {
       size_t idx = State.Stack.size() - Inst.Arg;
       std::swap(State.Stack[idx], State.Stack.back());
+    }
+    break;
+  }
+
+  case Opcode::LOAD_NAME: {
+    // Load a name from the names table
+    // For now, we only recognize built-in functions
+    if (Inst.Arg < Code.Names.size()) {
+      const std::string &Name = Code.Names[Inst.Arg];
+      if (Name == "print") {
+        // Push a magic value representing the print built-in
+        State.push(ConstantInt::get(getPyValuePtrTy(), BUILTIN_PRINT));
+      } else {
+        // Unknown name - push 0 for now
+        State.push(ConstantInt::get(getPyValuePtrTy(), 0));
+      }
+    } else {
+      State.push(ConstantInt::get(getPyValuePtrTy(), 0));
+    }
+    break;
+  }
+
+  case Opcode::CALL: {
+    // CALL argc - call a function with argc arguments
+    // Stack before: [callable, arg0, arg1, ..., argN-1] (with NULL below callable)
+    // Stack after: [result]
+    //
+    // Python 3.11+ CALL opcode:
+    // - Inst.Arg is the number of positional arguments
+    // - Stack has: NULL, callable, arg0, arg1, ..., argN-1 (from bottom to top)
+    // We need to pop args, callable, and NULL
+
+    uint32_t ArgCount = Inst.Arg;
+
+    // Pop arguments
+    std::vector<Value *> Args;
+    for (uint32_t i = 0; i < ArgCount; ++i) {
+      if (!State.Stack.empty())
+        Args.push_back(State.pop());
+    }
+    // Reverse to get correct order
+    std::reverse(Args.begin(), Args.end());
+
+    // Pop callable
+    Value *Callable = State.Stack.empty()
+                          ? ConstantInt::get(getPyValuePtrTy(), 0)
+                          : State.pop();
+
+    // Pop the NULL that was pushed by PUSH_NULL
+    if (!State.Stack.empty())
+      State.pop();
+
+    // Check if this is a known built-in
+    // For now, we'll generate a runtime check for print
+    auto *CallableConst = dyn_cast<ConstantInt>(Callable);
+    if (CallableConst && CallableConst->getSExtValue() == BUILTIN_PRINT) {
+      // Call plang_print with the first argument
+      if (!Args.empty()) {
+        auto *PrintFn = Builder->GetInsertBlock()->getModule()->getFunction("plang_print");
+        Builder->CreateCall(PrintFn->getFunctionType(), PrintFn, {Args[0]});
+      }
+      // print() returns None (0)
+      State.push(ConstantInt::get(getPyValuePtrTy(), 0));
+    } else {
+      // Unknown callable - push None
+      State.push(ConstantInt::get(getPyValuePtrTy(), 0));
     }
     break;
   }

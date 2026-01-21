@@ -19,9 +19,46 @@
 #include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/raw_ostream.h"
+#include <cstdio>
 
 using namespace llvm;
 using namespace plang;
+
+//===----------------------------------------------------------------------===//
+// Plang Runtime Functions
+// These functions are called by JIT-compiled code and resolved at runtime
+// through the DynamicLibrarySearchGenerator.
+//===----------------------------------------------------------------------===//
+
+/// Runtime string table - stores strings that can be printed
+/// Strings are identified by their index (encoded in the low bits of the value)
+static std::vector<std::string> RuntimeStrings;
+
+/// Register a string in the runtime table and return its index
+extern "C" int64_t plang_register_string(const char *str, size_t len) {
+  int64_t index = static_cast<int64_t>(RuntimeStrings.size());
+  RuntimeStrings.emplace_back(str, len);
+  return index;
+}
+
+/// Print a Python value
+/// For now, we use a tagged representation:
+/// - Positive values: integers
+/// - Special negative values: string indices (index = -(value + 1))
+extern "C" void plang_print(int64_t value) {
+  // Check if this is a string reference (negative value indicates string)
+  if (value < 0) {
+    int64_t index = -(value + 1);
+    if (static_cast<size_t>(index) < RuntimeStrings.size()) {
+      printf("%s\n", RuntimeStrings[index].c_str());
+      fflush(stdout);
+      return;
+    }
+  }
+  // Otherwise print as integer
+  printf("%ld\n", value);
+  fflush(stdout);
+}
 
 // Command line options
 static cl::OptionCategory PlangCategory("Plang Options");
@@ -128,6 +165,18 @@ int main(int argc, char **argv) {
 
       auto &JIT = *JITOrErr;
 
+      // Register runtime functions with the JIT
+      if (auto Err = JIT->defineAbsoluteSymbol("plang_print",
+                                                reinterpret_cast<void *>(&plang_print))) {
+        errs() << "Error registering plang_print: " << toString(std::move(Err)) << "\n";
+        return 1;
+      }
+      if (auto Err = JIT->defineAbsoluteSymbol("plang_register_string",
+                                                reinterpret_cast<void *>(&plang_register_string))) {
+        errs() << "Error registering plang_register_string: " << toString(std::move(Err)) << "\n";
+        return 1;
+      }
+
       // Add the module
       if (auto Err = JIT->addModule(
               orc::ThreadSafeModule(std::move(Module),
@@ -148,6 +197,7 @@ int main(int argc, char **argv) {
       // Get the function pointer and call it
       auto *EntryFn = SymOrErr->getAddress().toPtr<int64_t (*)()>();
       outs() << "Executing " << EntryName << "...\n";
+      outs().flush();  // Flush before JIT code runs (it uses printf)
 
       int64_t Result = EntryFn();
 

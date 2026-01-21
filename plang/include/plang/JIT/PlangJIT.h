@@ -50,6 +50,9 @@ public:
   /// Look up a symbol in the JIT
   llvm::Expected<llvm::orc::ExecutorSymbolDef> lookup(llvm::StringRef Name);
 
+  /// Define an absolute symbol in the JIT
+  llvm::Error defineAbsoluteSymbol(llvm::StringRef Name, void *Addr);
+
   /// Get the JIT's main JITDylib
   llvm::orc::JITDylib &getMainJITDylib() { return *MainJD; }
 

@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "plang/JIT/PlangJIT.h"
+#include "llvm/ExecutionEngine/Orc/AbsoluteSymbols.h"
 #include "llvm/ExecutionEngine/Orc/CompileUtils.h"
 #include "llvm/ExecutionEngine/Orc/ExecutionUtils.h"
 #include "llvm/ExecutionEngine/Orc/SelfExecutorProcessControl.h"
@@ -67,4 +68,11 @@ Error PlangJIT::addModule(ThreadSafeModule TSM, ResourceTrackerSP RT) {
 
 Expected<ExecutorSymbolDef> PlangJIT::lookup(StringRef Name) {
   return ES->lookup({MainJD}, Mangle(Name.str()));
+}
+
+Error PlangJIT::defineAbsoluteSymbol(StringRef Name, void *Addr) {
+  auto Symbol = orc::ExecutorSymbolDef(
+      orc::ExecutorAddr::fromPtr(Addr),
+      JITSymbolFlags::Exported | JITSymbolFlags::Callable);
+  return MainJD->define(orc::absoluteSymbols({{Mangle(Name.str()), Symbol}}));
 }
