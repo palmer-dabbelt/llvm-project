@@ -1,7 +1,7 @@
 # Test that compileall-compiled empty module runs successfully
 #
 # RUN: rm -rf %t && mkdir -p %t
-# RUN: echo "# Empty module" > %t/empty.py
-# RUN: %python -m compileall -b %t/empty.py
-# RUN: %plang --run %t/empty.pyc | FileCheck %s
+# RUN: cp %s %t/test.py
+# RUN: %python -m compileall -b %t/test.py
+# RUN: %plang --run %t/test.pyc | FileCheck %s
 # CHECK: Result: 0
