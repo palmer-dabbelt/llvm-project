@@ -1,0 +1,27 @@
+# Test less-than comparison operator
+#
+# RUN: rm -rf %t && mkdir -p %t
+# RUN: cp %s %t/test.py
+# RUN: %python -m compileall -b %t/test.py
+# RUN: %plang --run %t/test.pyc | FileCheck %s
+# CHECK: 1
+# CHECK: 0
+# CHECK: 0
+# CHECK: 1
+# CHECK: Result: 0
+
+# Less than comparisons
+x = 3
+y = 5
+
+# 3 < 5 = True (1)
+print(x < y)
+
+# 5 < 3 = False (0)
+print(y < x)
+
+# 3 < 3 = False (0)
+print(x < x)
+
+# 1 < 3 = True (1)
+print(1 < x)

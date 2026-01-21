@@ -1,0 +1,22 @@
+# Test unary operators: negation, not, bitwise invert
+#
+# RUN: rm -rf %t && mkdir -p %t
+# RUN: cp %s %t/test.py
+# RUN: %python -m compileall -b %t/test.py
+# RUN: %plang --run %t/test.pyc | FileCheck %s
+# CHECK: -5
+# CHECK: 1
+# CHECK: 0
+# CHECK: -6
+# CHECK: Result: 0
+
+# Unary negative
+x = 5
+print(-x)
+
+# Unary not (boolean conversion)
+print(not 0)
+print(not 1)
+
+# Bitwise invert: ~5 = -6 (in two's complement)
+print(~5)

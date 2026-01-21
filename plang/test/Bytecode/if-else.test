@@ -1,0 +1,25 @@
+# Test if-else control flow (exercises JUMP_FORWARD and POP_JUMP_IF_FALSE)
+#
+# RUN: rm -rf %t && mkdir -p %t
+# RUN: cp %s %t/test.py
+# RUN: %python -m compileall -b %t/test.py
+# RUN: %plang --run %t/test.pyc | FileCheck %s
+# CHECK: 10
+# CHECK: 5
+# CHECK: Result: 0
+
+# Test 1: condition is false (2 < 1 = False), take else branch
+x = 2
+if x < 1:
+    y = 0
+else:
+    y = 10
+print(y)
+
+# Test 2: condition is false (5 < 3 = False), take else branch
+z = 5
+if z < 3:
+    w = 0
+else:
+    w = 5
+print(w)

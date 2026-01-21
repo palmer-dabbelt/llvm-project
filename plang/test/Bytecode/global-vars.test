@@ -1,0 +1,22 @@
+# Test module-level variable storage (STORE_NAME, LOAD_NAME)
+#
+# RUN: rm -rf %t && mkdir -p %t
+# RUN: cp %s %t/test.py
+# RUN: %python -m compileall -b %t/test.py
+# RUN: %plang --run %t/test.pyc | FileCheck %s
+# CHECK: 10
+# CHECK: 20
+# CHECK: 30
+# CHECK: Result: 0
+
+# Store to module-level name
+g = 10
+print(g)
+
+# Update module-level name
+g = 20
+print(g)
+
+# Use module-level name in expression
+h = g + 10
+print(h)

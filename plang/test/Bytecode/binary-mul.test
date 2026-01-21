@@ -1,0 +1,11 @@
+# Test binary multiplication operator
+#
+# RUN: rm -rf %t && mkdir -p %t
+# RUN: cp %s %t/test.py
+# RUN: %python -m compileall -b %t/test.py
+# RUN: %plang --run %t/test.pyc | FileCheck %s
+# CHECK: 42
+# CHECK: Result: 0
+
+x = 6 * 7
+print(x)

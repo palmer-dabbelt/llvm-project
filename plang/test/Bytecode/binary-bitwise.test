@@ -1,0 +1,23 @@
+# Test bitwise operators: &, |, ^, <<
+#
+# RUN: rm -rf %t && mkdir -p %t
+# RUN: cp %s %t/test.py
+# RUN: %python -m compileall -b %t/test.py
+# RUN: %plang --run %t/test.pyc | FileCheck %s
+# CHECK: 4
+# CHECK: 7
+# CHECK: 3
+# CHECK: 20
+# CHECK: Result: 0
+
+# Bitwise AND: 5 & 6 = 0101 & 0110 = 0100 = 4
+print(5 & 6)
+
+# Bitwise OR: 5 | 6 = 0101 | 0110 = 0111 = 7
+print(5 | 6)
+
+# Bitwise XOR: 5 ^ 6 = 0101 ^ 0110 = 0011 = 3
+print(5 ^ 6)
+
+# Left shift: 5 << 2 = 5 * 4 = 20
+print(5 << 2)

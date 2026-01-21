@@ -1,0 +1,11 @@
+# Test binary division operator (integer division in our simplified runtime)
+#
+# RUN: rm -rf %t && mkdir -p %t
+# RUN: cp %s %t/test.py
+# RUN: %python -m compileall -b %t/test.py
+# RUN: %plang --run %t/test.pyc | FileCheck %s
+# CHECK: 5
+# CHECK: Result: 0
+
+x = 15 // 3
+print(x)
