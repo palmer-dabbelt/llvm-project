@@ -595,9 +595,9 @@ Error BytecodeCompiler::compileInstruction(const Instruction &Inst,
   }
 
   default:
-    // Unimplemented opcodes - for now, just skip them
-    // In a full implementation, we'd need to handle all opcodes
-    break;
+    return createStringError("unhandled opcode: " + getOpcodeName(Inst.Op).str() +
+                             " (" + std::to_string(static_cast<int>(Inst.Op)) +
+                             ") at offset " + std::to_string(Inst.Offset));
   }
 
   return Error::success();
