@@ -1,0 +1,5 @@
+# Test that a module returning 0 exits successfully
+#
+# RUN: %python -c "import marshal, struct; code = compile('0', 'test', 'eval'); f = open('%t.pyc', 'wb'); f.write(b'a\r\r\n' + struct.pack('<I', 0) * 3 + marshal.dumps(code)); f.close()"
+# RUN: %plang --run %t.pyc | FileCheck %s
+# CHECK: Result: 0

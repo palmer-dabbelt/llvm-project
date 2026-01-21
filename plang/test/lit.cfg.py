@@ -22,10 +22,10 @@ config.name = 'Plang'
 config.test_format = lit.formats.ShTest(not llvm_config.use_lit_shell)
 
 # suffixes: A list of file extensions to treat as test files.
-config.suffixes = ['.test', '.py']
+config.suffixes = ['.test']
 
 # excludes: A list of directories to exclude from the testsuite.
-config.excludes = ['Inputs', 'CMakeLists.txt', 'README.txt', 'LICENSE.txt']
+config.excludes = ['Inputs', 'CMakeLists.txt', 'README.txt', 'LICENSE.txt', 'lit.cfg.py', 'lit.site.cfg.py']
 
 # test_source_root: The root path where tests are located.
 config.test_source_root = os.path.dirname(__file__)
@@ -48,3 +48,6 @@ tools = [
 ]
 
 llvm_config.add_tool_substitutions(tools, config.llvm_tools_dir)
+
+# Add python substitution
+config.substitutions.append(('%python', config.python_executable))

@@ -1,0 +1,4 @@
+# Test that a module returning 1 exits with failure
+#
+# RUN: %python -c "import marshal, struct; code = compile('1', 'test', 'eval'); f = open('%t.pyc', 'wb'); f.write(b'a\r\r\n' + struct.pack('<I', 0) * 3 + marshal.dumps(code)); f.close()"
+# RUN: not %plang --run %t.pyc

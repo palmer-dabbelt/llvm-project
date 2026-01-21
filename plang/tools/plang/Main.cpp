@@ -152,7 +152,8 @@ int main(int argc, char **argv) {
       int64_t Result = EntryFn();
 
       outs() << "Result: " << Result << "\n";
-      return 0;
+      // Use the module's return value as exit code (clamped to valid range)
+      return static_cast<int>(Result & 0xFF);
     }
   }
 
