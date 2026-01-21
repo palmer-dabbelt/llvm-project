@@ -354,7 +354,7 @@ BytecodeLoader::unmarshalObject(const uint8_t *Data, size_t Size,
 
     auto Code = std::make_shared<CodeObject>();
 
-    // Python 3.11+ code object format
+    // Python 3.11+ code object format (5 int fields, not 6 - no nlocals)
     if (Offset + 4 > Size)
       return createStringError("Truncated code argcount");
     Code->ArgCount = readU32LE(Data + Offset);
@@ -370,10 +370,8 @@ BytecodeLoader::unmarshalObject(const uint8_t *Data, size_t Size,
     Code->KwOnlyArgCount = readU32LE(Data + Offset);
     Offset += 4;
 
-    if (Offset + 4 > Size)
-      return createStringError("Truncated code nlocals");
-    Code->NumLocals = readU32LE(Data + Offset);
-    Offset += 4;
+    // Note: Python 3.11+ removed nlocals from serialized format
+    // It's now derived from localspluskinds
 
     if (Offset + 4 > Size)
       return createStringError("Truncated code stacksize");
@@ -418,38 +416,50 @@ BytecodeLoader::unmarshalObject(const uint8_t *Data, size_t Size,
       }
     }
 
-    // Local names (varnames)
-    auto LocalNamesOrErr = unmarshalObject(Data, Size, Offset, Refs);
-    if (!LocalNamesOrErr)
-      return LocalNamesOrErr.takeError();
-    if ((*LocalNamesOrErr)->isTuple()) {
-      for (const auto &elem : (*LocalNamesOrErr)->getTuple()) {
+    // Python 3.11+: localsplusnames (combines varnames, freevars, cellvars)
+    auto LocalPlusNamesOrErr = unmarshalObject(Data, Size, Offset, Refs);
+    if (!LocalPlusNamesOrErr)
+      return LocalPlusNamesOrErr.takeError();
+    std::vector<std::string> localPlusNames;
+    if ((*LocalPlusNamesOrErr)->isTuple()) {
+      for (const auto &elem : (*LocalPlusNamesOrErr)->getTuple()) {
         if (elem->isString())
-          Code->LocalNames.push_back(std::string(elem->getString()));
+          localPlusNames.push_back(std::string(elem->getString()));
       }
     }
 
-    // Free vars
-    auto FreeVarsOrErr = unmarshalObject(Data, Size, Offset, Refs);
-    if (!FreeVarsOrErr)
-      return FreeVarsOrErr.takeError();
-    if ((*FreeVarsOrErr)->isTuple()) {
-      for (const auto &elem : (*FreeVarsOrErr)->getTuple()) {
-        if (elem->isString())
-          Code->FreeVars.push_back(std::string(elem->getString()));
+    // Python 3.11+: localspluskinds (byte array indicating type of each local)
+    // CO_FAST_LOCAL = 0x20, CO_FAST_CELL = 0x40, CO_FAST_FREE = 0x80
+    auto LocalPlusKindsOrErr = unmarshalObject(Data, Size, Offset, Refs);
+    if (!LocalPlusKindsOrErr)
+      return LocalPlusKindsOrErr.takeError();
+    std::vector<uint8_t> localPlusKinds;
+    if ((*LocalPlusKindsOrErr)->isBytes()) {
+      auto bytes = (*LocalPlusKindsOrErr)->getBytes();
+      localPlusKinds.assign(bytes.begin(), bytes.end());
+    } else if ((*LocalPlusKindsOrErr)->isString()) {
+      auto str = (*LocalPlusKindsOrErr)->getString();
+      localPlusKinds.assign(str.begin(), str.end());
+    }
+
+    // Parse localsplusnames/kinds into LocalNames, FreeVars, CellVars
+    constexpr uint8_t CO_FAST_LOCAL = 0x20;
+    constexpr uint8_t CO_FAST_CELL = 0x40;
+    constexpr uint8_t CO_FAST_FREE = 0x80;
+
+    for (size_t i = 0; i < localPlusNames.size() && i < localPlusKinds.size(); ++i) {
+      uint8_t kind = localPlusKinds[i];
+      if (kind & CO_FAST_FREE) {
+        Code->FreeVars.push_back(localPlusNames[i]);
+      } else if (kind & CO_FAST_CELL) {
+        Code->CellVars.push_back(localPlusNames[i]);
+      } else if (kind & CO_FAST_LOCAL) {
+        Code->LocalNames.push_back(localPlusNames[i]);
       }
     }
 
-    // Cell vars
-    auto CellVarsOrErr = unmarshalObject(Data, Size, Offset, Refs);
-    if (!CellVarsOrErr)
-      return CellVarsOrErr.takeError();
-    if ((*CellVarsOrErr)->isTuple()) {
-      for (const auto &elem : (*CellVarsOrErr)->getTuple()) {
-        if (elem->isString())
-          Code->CellVars.push_back(std::string(elem->getString()));
-      }
-    }
+    // NumLocals is the count of locals (not freevars or cellvars)
+    Code->NumLocals = Code->LocalNames.size();
 
     // Filename
     auto FilenameOrErr = unmarshalObject(Data, Size, Offset, Refs);
