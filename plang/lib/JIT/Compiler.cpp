@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "plang/JIT/Compiler.h"
+#include "llvm/ADT/Twine.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Function.h"
@@ -133,8 +134,7 @@ BytecodeCompiler::compile(const CodeObject &Code, StringRef ModuleName) {
   std::string ErrStr;
   raw_string_ostream ErrOS(ErrStr);
   if (verifyModule(*M, &ErrOS)) {
-    return createStringError(std::errc::invalid_argument,
-                             "Module verification failed: " + ErrStr);
+    return createStringError(Twine("Module verification failed: ") + ErrStr);
   }
 
   return M;

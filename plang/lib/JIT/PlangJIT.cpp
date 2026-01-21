@@ -9,6 +9,7 @@
 #include "plang/JIT/PlangJIT.h"
 #include "llvm/ExecutionEngine/Orc/CompileUtils.h"
 #include "llvm/ExecutionEngine/Orc/ExecutionUtils.h"
+#include "llvm/ExecutionEngine/Orc/SelfExecutorProcessControl.h"
 #include "llvm/ExecutionEngine/Orc/TargetProcess/TargetExecutionUtils.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Support/TargetSelect.h"
@@ -21,7 +22,7 @@ PlangJIT::PlangJIT(std::unique_ptr<ExecutionSession> ES,
                    JITTargetMachineBuilder JTMB, DataLayout DL)
     : ES(std::move(ES)), DL(std::move(DL)), Mangle(*this->ES, this->DL),
       ObjectLayer(*this->ES,
-                  []() { return std::make_unique<SectionMemoryManager>(); }),
+                  [](const MemoryBuffer &) { return std::make_unique<SectionMemoryManager>(); }),
       CompileLayer(*this->ES, ObjectLayer,
                    std::make_unique<ConcurrentIRCompiler>(std::move(JTMB))),
       Ctx(std::make_unique<LLVMContext>()) {

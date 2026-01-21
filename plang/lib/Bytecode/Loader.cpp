@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "plang/Bytecode/Loader.h"
+#include "llvm/ADT/Twine.h"
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/MemoryBuffer.h"
@@ -98,7 +99,7 @@ BytecodeLoader::loadFromFile(StringRef Path) {
   auto BufferOrErr = MemoryBuffer::getFile(Path);
   if (!BufferOrErr)
     return createStringError(BufferOrErr.getError(),
-                             "Failed to open file: " + Path.str());
+                             Twine("Failed to open file: ") + Path);
 
   return loadFromBuffer((*BufferOrErr)->getMemBufferRef());
 }
@@ -110,8 +111,7 @@ BytecodeLoader::loadFromBuffer(MemoryBufferRef Buffer) {
   size_t Size = Buffer.getBufferSize();
 
   if (Size < 16)
-    return createStringError(std::errc::invalid_argument,
-                             "File too small to be a valid .pyc file");
+    return createStringError("File too small to be a valid .pyc file");
 
   // Parse header
   auto HeaderOrErr = parseHeader(Data, Size);
@@ -132,8 +132,7 @@ BytecodeLoader::loadFromBuffer(MemoryBufferRef Buffer) {
 Expected<PycHeader> BytecodeLoader::parseHeader(const uint8_t *Data,
                                                  size_t Size) {
   if (Size < 16)
-    return createStringError(std::errc::invalid_argument,
-                             "Header too small");
+    return createStringError("Header too small");
 
   PycHeader Header;
   Header.Magic = readU32LE(Data);
@@ -143,8 +142,7 @@ Expected<PycHeader> BytecodeLoader::parseHeader(const uint8_t *Data,
   // Python magic is structured as: magic_number | (0x0a0d << 16)
   uint16_t magicCheck = (Header.Magic >> 16) & 0xFFFF;
   if (magicCheck != 0x0a0d)
-    return createStringError(std::errc::invalid_argument,
-                             "Invalid Python magic number");
+    return createStringError("Invalid Python magic number");
 
   // PEP 552: bit 0 of BitField indicates hash-based pyc
   Header.IsHashBased = (Header.BitField & 1) != 0;
@@ -172,8 +170,7 @@ BytecodeLoader::unmarshalCode(const uint8_t *Data, size_t Size,
 
   auto Obj = *ObjOrErr;
   if (!Obj->isCode())
-    return createStringError(std::errc::invalid_argument,
-                             "Expected code object at top level");
+    return createStringError("Expected code object at top level");
 
   return Obj->getCode();
 }
@@ -183,8 +180,7 @@ BytecodeLoader::unmarshalObject(const uint8_t *Data, size_t Size,
                                  size_t &Offset,
                                  std::vector<std::shared_ptr<PyObject>> &Refs) {
   if (Offset >= Size)
-    return createStringError(std::errc::invalid_argument,
-                             "Unexpected end of marshal data");
+    return createStringError("Unexpected end of marshal data");
 
   uint8_t TypeByte = Data[Offset++];
   bool AddRef = (TypeByte & FLAG_REF) != 0;
@@ -211,8 +207,7 @@ BytecodeLoader::unmarshalObject(const uint8_t *Data, size_t Size,
 
   case TYPE_INT: {
     if (Offset + 4 > Size)
-      return createStringError(std::errc::invalid_argument,
-                               "Truncated int");
+      return createStringError("Truncated int");
     int32_t val = readS32LE(Data + Offset);
     Offset += 4;
     Result = std::make_shared<PyObject>(static_cast<int64_t>(val));
@@ -221,16 +216,14 @@ BytecodeLoader::unmarshalObject(const uint8_t *Data, size_t Size,
 
   case TYPE_LONG: {
     if (Offset + 4 > Size)
-      return createStringError(std::errc::invalid_argument,
-                               "Truncated long size");
+      return createStringError("Truncated long size");
     int32_t ndigits = readS32LE(Data + Offset);
     Offset += 4;
     bool negative = ndigits < 0;
     size_t absDigits = negative ? -ndigits : ndigits;
 
     if (Offset + absDigits * 2 > Size)
-      return createStringError(std::errc::invalid_argument,
-                               "Truncated long digits");
+      return createStringError("Truncated long digits");
 
     // Simple conversion for small longs (fits in int64)
     int64_t value = 0;
@@ -248,8 +241,7 @@ BytecodeLoader::unmarshalObject(const uint8_t *Data, size_t Size,
 
   case TYPE_BINARY_FLOAT: {
     if (Offset + 8 > Size)
-      return createStringError(std::errc::invalid_argument,
-                               "Truncated float");
+      return createStringError("Truncated float");
     double val;
     std::memcpy(&val, Data + Offset, 8);
     Offset += 8;
@@ -260,12 +252,10 @@ BytecodeLoader::unmarshalObject(const uint8_t *Data, size_t Size,
   case TYPE_SHORT_ASCII:
   case TYPE_SHORT_ASCII_INTERNED: {
     if (Offset >= Size)
-      return createStringError(std::errc::invalid_argument,
-                               "Truncated short ascii length");
+      return createStringError("Truncated short ascii length");
     uint8_t len = Data[Offset++];
     if (Offset + len > Size)
-      return createStringError(std::errc::invalid_argument,
-                               "Truncated short ascii string");
+      return createStringError("Truncated short ascii string");
     std::string str(reinterpret_cast<const char *>(Data + Offset), len);
     Offset += len;
     Result = std::make_shared<PyObject>(std::move(str));
@@ -278,13 +268,11 @@ BytecodeLoader::unmarshalObject(const uint8_t *Data, size_t Size,
   case TYPE_STRING:
   case TYPE_INTERNED: {
     if (Offset + 4 > Size)
-      return createStringError(std::errc::invalid_argument,
-                               "Truncated string length");
+      return createStringError("Truncated string length");
     uint32_t len = readU32LE(Data + Offset);
     Offset += 4;
     if (Offset + len > Size)
-      return createStringError(std::errc::invalid_argument,
-                               "Truncated string data");
+      return createStringError("Truncated string data");
     std::string str(reinterpret_cast<const char *>(Data + Offset), len);
     Offset += len;
     Result = std::make_shared<PyObject>(std::move(str));
@@ -293,8 +281,7 @@ BytecodeLoader::unmarshalObject(const uint8_t *Data, size_t Size,
 
   case TYPE_SMALL_TUPLE: {
     if (Offset >= Size)
-      return createStringError(std::errc::invalid_argument,
-                               "Truncated small tuple size");
+      return createStringError("Truncated small tuple size");
     uint8_t n = Data[Offset++];
 
     // Reserve ref slot early if needed
@@ -321,8 +308,7 @@ BytecodeLoader::unmarshalObject(const uint8_t *Data, size_t Size,
 
   case TYPE_TUPLE: {
     if (Offset + 4 > Size)
-      return createStringError(std::errc::invalid_argument,
-                               "Truncated tuple size");
+      return createStringError("Truncated tuple size");
     uint32_t n = readU32LE(Data + Offset);
     Offset += 4;
 
@@ -349,13 +335,11 @@ BytecodeLoader::unmarshalObject(const uint8_t *Data, size_t Size,
 
   case TYPE_REF: {
     if (Offset + 4 > Size)
-      return createStringError(std::errc::invalid_argument,
-                               "Truncated ref index");
+      return createStringError("Truncated ref index");
     uint32_t idx = readU32LE(Data + Offset);
     Offset += 4;
     if (idx >= Refs.size() || !Refs[idx])
-      return createStringError(std::errc::invalid_argument,
-                               "Invalid ref index");
+      return createStringError("Invalid ref index");
     return Refs[idx];
   }
 
@@ -372,38 +356,32 @@ BytecodeLoader::unmarshalObject(const uint8_t *Data, size_t Size,
 
     // Python 3.11+ code object format
     if (Offset + 4 > Size)
-      return createStringError(std::errc::invalid_argument,
-                               "Truncated code argcount");
+      return createStringError("Truncated code argcount");
     Code->ArgCount = readU32LE(Data + Offset);
     Offset += 4;
 
     if (Offset + 4 > Size)
-      return createStringError(std::errc::invalid_argument,
-                               "Truncated code posonlyargcount");
+      return createStringError("Truncated code posonlyargcount");
     Code->PosOnlyArgCount = readU32LE(Data + Offset);
     Offset += 4;
 
     if (Offset + 4 > Size)
-      return createStringError(std::errc::invalid_argument,
-                               "Truncated code kwonlyargcount");
+      return createStringError("Truncated code kwonlyargcount");
     Code->KwOnlyArgCount = readU32LE(Data + Offset);
     Offset += 4;
 
     if (Offset + 4 > Size)
-      return createStringError(std::errc::invalid_argument,
-                               "Truncated code nlocals");
+      return createStringError("Truncated code nlocals");
     Code->NumLocals = readU32LE(Data + Offset);
     Offset += 4;
 
     if (Offset + 4 > Size)
-      return createStringError(std::errc::invalid_argument,
-                               "Truncated code stacksize");
+      return createStringError("Truncated code stacksize");
     Code->StackSize = readU32LE(Data + Offset);
     Offset += 4;
 
     if (Offset + 4 > Size)
-      return createStringError(std::errc::invalid_argument,
-                               "Truncated code flags");
+      return createStringError("Truncated code flags");
     Code->Flags = readU32LE(Data + Offset);
     Offset += 4;
 
@@ -496,8 +474,7 @@ BytecodeLoader::unmarshalObject(const uint8_t *Data, size_t Size,
 
     // First line number
     if (Offset + 4 > Size)
-      return createStringError(std::errc::invalid_argument,
-                               "Truncated code firstlineno");
+      return createStringError("Truncated code firstlineno");
     Code->FirstLineNo = readU32LE(Data + Offset);
     Offset += 4;
 
@@ -538,9 +515,8 @@ BytecodeLoader::unmarshalObject(const uint8_t *Data, size_t Size,
 
   default:
     return createStringError(
-        std::errc::invalid_argument,
-        "Unsupported marshal type: " + std::to_string(Type) + " ('" +
-            std::string(1, static_cast<char>(Type)) + "')");
+        Twine("Unsupported marshal type: ") + Twine(Type) + " ('" +
+            Twine(static_cast<char>(Type)) + "')");
   }
 
   if (AddRef && Result)
@@ -561,9 +537,8 @@ Expected<uint32_t> BytecodeLoader::readVarint(const uint8_t *Data, size_t Size,
       return result;
     shift += 7;
     if (shift > 28)
-      return createStringError(std::errc::invalid_argument,
-                               "Varint too large");
+      return createStringError("Varint too large");
   }
 
-  return createStringError(std::errc::invalid_argument, "Truncated varint");
+  return createStringError("Truncated varint");
 }

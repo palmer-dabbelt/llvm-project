@@ -41,7 +41,7 @@ public:
   const llvm::DataLayout &getDataLayout() const { return DL; }
 
   /// Get a reference to the LLVM context
-  llvm::LLVMContext &getContext() { return *Ctx.getContext(); }
+  llvm::LLVMContext &getContext() { return *Ctx; }
 
   /// Add an LLVM module to the JIT
   llvm::Error addModule(llvm::orc::ThreadSafeModule TSM,
@@ -68,7 +68,7 @@ private:
   llvm::orc::RTDyldObjectLinkingLayer ObjectLayer;
   llvm::orc::IRCompileLayer CompileLayer;
   llvm::orc::JITDylib *MainJD;
-  llvm::orc::ThreadSafeContext Ctx;
+  std::unique_ptr<llvm::LLVMContext> Ctx;
 };
 
 } // namespace plang

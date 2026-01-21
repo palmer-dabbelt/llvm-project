@@ -47,13 +47,6 @@ static cl::opt<bool> Run("run", cl::desc("JIT compile and run the code"),
 static cl::alias RunAlias("r", cl::desc("Alias for --run"), cl::aliasopt(Run),
                           cl::cat(PlangCategory));
 
-static cl::opt<bool> ShowVersion("version", cl::desc("Show version information"),
-                                  cl::cat(PlangCategory));
-
-static cl::alias VersionAlias("v", cl::desc("Alias for --version"),
-                               cl::aliasopt(ShowVersion),
-                               cl::cat(PlangCategory));
-
 static void printVersion(raw_ostream &OS) {
   OS << getPlangFullVersion() << "\n";
 }
@@ -67,11 +60,6 @@ int main(int argc, char **argv) {
                                "plang - Python bytecode JIT compiler\n\n"
                                "A tool for loading, disassembling, and JIT "
                                "compiling Python bytecode.\n");
-
-  if (ShowVersion) {
-    printVersion(outs());
-    return 0;
-  }
 
   if (InputFile.empty()) {
     errs() << "Error: No input file specified.\n";
