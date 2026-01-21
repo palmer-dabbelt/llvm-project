@@ -283,6 +283,31 @@ Error BytecodeCompiler::compileInstruction(const Instruction &Inst,
     // No-op instructions
     break;
 
+  case Opcode::UNARY_NEGATIVE: {
+    // Negate top of stack
+    Value *Val = emitPop(State);
+    Value *Result = Builder->CreateNeg(Val, "neg");
+    emitPush(State, Result);
+    break;
+  }
+
+  case Opcode::UNARY_NOT: {
+    // Logical not - convert to bool (0 or 1) then invert
+    Value *Val = emitPop(State);
+    Value *IsZero = Builder->CreateICmpEQ(Val, ConstantInt::get(getPyValuePtrTy(), 0), "is_zero");
+    Value *Result = Builder->CreateZExt(IsZero, getPyValuePtrTy(), "not_result");
+    emitPush(State, Result);
+    break;
+  }
+
+  case Opcode::UNARY_INVERT: {
+    // Bitwise invert
+    Value *Val = emitPop(State);
+    Value *Result = Builder->CreateNot(Val, "invert");
+    emitPush(State, Result);
+    break;
+  }
+
   case Opcode::PUSH_NULL:
     // Push None onto stack
     emitPush(State, ConstantInt::get(getPyValuePtrTy(), 0));
@@ -330,6 +355,38 @@ Error BytecodeCompiler::compileInstruction(const Instruction &Inst,
     if (Inst.Arg < State.Locals.size()) {
       Value *Val = emitPop(State);
       Builder->CreateStore(Val, State.Locals[Inst.Arg]);
+    }
+    break;
+  }
+
+  case Opcode::DELETE_FAST: {
+    // Delete a local variable (set to None/0)
+    if (Inst.Arg < State.Locals.size()) {
+      Builder->CreateStore(ConstantInt::get(getPyValuePtrTy(), 0), State.Locals[Inst.Arg]);
+    }
+    break;
+  }
+
+  case Opcode::LOAD_FAST_CHECK: {
+    // Load local variable with check (for use before assignment)
+    // For now, treat same as LOAD_FAST
+    if (Inst.Arg < State.Locals.size()) {
+      Value *Val = Builder->CreateLoad(getPyValuePtrTy(), State.Locals[Inst.Arg]);
+      emitPush(State, Val);
+    } else {
+      emitPush(State, ConstantInt::get(getPyValuePtrTy(), 0));
+    }
+    break;
+  }
+
+  case Opcode::LOAD_FAST_AND_CLEAR: {
+    // Load local variable and clear it (used in comprehensions)
+    if (Inst.Arg < State.Locals.size()) {
+      Value *Val = Builder->CreateLoad(getPyValuePtrTy(), State.Locals[Inst.Arg]);
+      emitPush(State, Val);
+      Builder->CreateStore(ConstantInt::get(getPyValuePtrTy(), 0), State.Locals[Inst.Arg]);
+    } else {
+      emitPush(State, ConstantInt::get(getPyValuePtrTy(), 0));
     }
     break;
   }
@@ -400,6 +457,220 @@ Error BytecodeCompiler::compileInstruction(const Instruction &Inst,
     break;
   }
 
+  case Opcode::BUILD_TUPLE:
+  case Opcode::BUILD_LIST:
+  case Opcode::BUILD_SET: {
+    // Pop Arg items and build a collection
+    // For now, just pop all items and push 0 (placeholder)
+    for (uint32_t i = 0; i < Inst.Arg; ++i) {
+      emitPop(State);
+    }
+    emitPush(State, ConstantInt::get(getPyValuePtrTy(), 0));
+    break;
+  }
+
+  case Opcode::BUILD_MAP: {
+    // Pop Arg key/value pairs (2*Arg items) and build a dict
+    for (uint32_t i = 0; i < Inst.Arg * 2; ++i) {
+      emitPop(State);
+    }
+    emitPush(State, ConstantInt::get(getPyValuePtrTy(), 0));
+    break;
+  }
+
+  case Opcode::BUILD_CONST_KEY_MAP: {
+    // Pop Arg values + 1 tuple of keys, build a dict
+    for (uint32_t i = 0; i < Inst.Arg + 1; ++i) {
+      emitPop(State);
+    }
+    emitPush(State, ConstantInt::get(getPyValuePtrTy(), 0));
+    break;
+  }
+
+  case Opcode::BUILD_STRING: {
+    // Pop Arg strings, concatenate them
+    for (uint32_t i = 0; i < Inst.Arg; ++i) {
+      emitPop(State);
+    }
+    emitPush(State, ConstantInt::get(getPyValuePtrTy(), 0));
+    break;
+  }
+
+  case Opcode::BUILD_SLICE: {
+    // Pop 2 or 3 items (depending on Arg), build a slice
+    for (uint32_t i = 0; i < Inst.Arg; ++i) {
+      emitPop(State);
+    }
+    emitPush(State, ConstantInt::get(getPyValuePtrTy(), 0));
+    break;
+  }
+
+  case Opcode::UNPACK_SEQUENCE: {
+    // Unpack a sequence into Arg items
+    // Pop the sequence, push Arg values (all 0 for now)
+    emitPop(State);
+    for (uint32_t i = 0; i < Inst.Arg; ++i) {
+      emitPush(State, ConstantInt::get(getPyValuePtrTy(), 0));
+    }
+    break;
+  }
+
+  case Opcode::UNPACK_EX: {
+    // Unpack with starred target
+    // Low byte: count before star, high byte: count after star
+    uint32_t before = Inst.Arg & 0xFF;
+    uint32_t after = (Inst.Arg >> 8) & 0xFF;
+    emitPop(State);
+    for (uint32_t i = 0; i < before + 1 + after; ++i) {
+      emitPush(State, ConstantInt::get(getPyValuePtrTy(), 0));
+    }
+    break;
+  }
+
+  case Opcode::BINARY_SUBSCR: {
+    // Pop key, pop container, push result
+    emitPop(State); // key
+    emitPop(State); // container
+    emitPush(State, ConstantInt::get(getPyValuePtrTy(), 0));
+    break;
+  }
+
+  case Opcode::STORE_SUBSCR: {
+    // Pop key, pop container, pop value (store value into container[key])
+    emitPop(State); // key
+    emitPop(State); // container
+    emitPop(State); // value
+    break;
+  }
+
+  case Opcode::DELETE_SUBSCR: {
+    // Pop key, pop container (delete container[key])
+    emitPop(State); // key
+    emitPop(State); // container
+    break;
+  }
+
+  case Opcode::LIST_APPEND: {
+    // Append TOS to list at position Arg in stack
+    emitPop(State); // value to append
+    break;
+  }
+
+  case Opcode::SET_ADD: {
+    // Add TOS to set at position Arg in stack
+    emitPop(State);
+    break;
+  }
+
+  case Opcode::MAP_ADD: {
+    // Add key/value pair to dict at position Arg in stack
+    emitPop(State); // value
+    emitPop(State); // key
+    break;
+  }
+
+  case Opcode::LIST_EXTEND: {
+    // Extend list at Arg with TOS
+    emitPop(State);
+    break;
+  }
+
+  case Opcode::SET_UPDATE: {
+    // Update set at Arg with TOS
+    emitPop(State);
+    break;
+  }
+
+  case Opcode::DICT_MERGE: {
+    // Merge dict from TOS into dict at Arg
+    emitPop(State);
+    break;
+  }
+
+  case Opcode::DICT_UPDATE: {
+    // Update dict at Arg with TOS
+    emitPop(State);
+    break;
+  }
+
+  case Opcode::GET_LEN: {
+    // Get length of TOS, push length
+    // For now, just peek and push 0
+    emitPush(State, ConstantInt::get(getPyValuePtrTy(), 0));
+    break;
+  }
+
+  case Opcode::GET_ITER: {
+    // Get an iterator from TOS
+    // For now, just leave TOS as the iterator placeholder
+    // Stack effect: pop obj, push iterator
+    Value *Obj = emitPop(State);
+    emitPush(State, Obj); // Use same value as placeholder
+    break;
+  }
+
+  case Opcode::FOR_ITER: {
+    // Advance iterator on TOS, push next value or jump if exhausted
+    // For now, always treat as exhausted (jump to target)
+    uint32_t TargetOffset = Inst.Offset + Inst.Arg * 2 + 2;
+
+    BasicBlock *TargetBB = State.JumpTargets.count(TargetOffset)
+                               ? State.JumpTargets[TargetOffset]
+                               : nullptr;
+    if (!TargetBB) {
+      TargetBB = BasicBlock::Create(Ctx, "for_exhausted", State.Function);
+      State.JumpTargets[TargetOffset] = TargetBB;
+    }
+
+    // For now, always jump (iterator exhausted immediately)
+    Builder->CreateBr(TargetBB);
+    BasicBlock *DeadBB = BasicBlock::Create(Ctx, "dead", State.Function);
+    Builder->SetInsertPoint(DeadBB);
+    break;
+  }
+
+  case Opcode::END_FOR: {
+    // End of for loop - pop iterator and last value
+    emitPop(State); // value
+    emitPop(State); // iterator
+    break;
+  }
+
+  case Opcode::LOAD_ATTR: {
+    // Load attribute from object
+    // Python 3.12+: low bit indicates whether to push NULL first
+    // For now, just pop object and push 0 (placeholder)
+    bool pushNull = (Inst.Arg & 1) != 0;
+    emitPop(State); // object
+    if (pushNull) {
+      emitPush(State, ConstantInt::get(getPyValuePtrTy(), 0)); // NULL for method call
+    }
+    emitPush(State, ConstantInt::get(getPyValuePtrTy(), 0)); // attribute value
+    break;
+  }
+
+  case Opcode::STORE_ATTR: {
+    // Store TOS to attribute of second on stack
+    emitPop(State); // value
+    emitPop(State); // object
+    break;
+  }
+
+  case Opcode::DELETE_ATTR: {
+    // Delete attribute of TOS
+    emitPop(State); // object
+    break;
+  }
+
+  case Opcode::LOAD_SUPER_ATTR: {
+    // Load attribute from super
+    // Stack: class, self -> attribute
+    emitPop(State); // self
+    emitPop(State); // class
+    emitPush(State, ConstantInt::get(getPyValuePtrTy(), 0)); // placeholder
+    break;
+  }
+
   case Opcode::LOAD_NAME: {
     // Load a name from the names table
     if (Inst.Arg < Code.Names.size()) {
@@ -427,6 +698,60 @@ Error BytecodeCompiler::compileInstruction(const Instruction &Inst,
       Builder->CreateStore(Val, State.Names[Inst.Arg]);
     } else {
       emitPop(State); // Pop and discard if invalid
+    }
+    break;
+  }
+
+  case Opcode::DELETE_NAME: {
+    // Delete a name (set to None/0)
+    if (Inst.Arg < State.Names.size()) {
+      Builder->CreateStore(ConstantInt::get(getPyValuePtrTy(), 0), State.Names[Inst.Arg]);
+    }
+    break;
+  }
+
+  case Opcode::LOAD_GLOBAL: {
+    // Load a global variable
+    // In Python 3.11+, bit 0 of arg indicates whether to push NULL first
+    // Bit 1 onwards is the name index
+    bool pushNull = (Inst.Arg & 1) != 0;
+    uint32_t nameIdx = Inst.Arg >> 1;
+
+    if (pushNull) {
+      emitPush(State, ConstantInt::get(getPyValuePtrTy(), 0));
+    }
+
+    if (nameIdx < Code.Names.size()) {
+      const std::string &Name = Code.Names[nameIdx];
+      if (Name == "print") {
+        emitPush(State, ConstantInt::get(getPyValuePtrTy(), BUILTIN_PRINT));
+      } else if (nameIdx < State.Names.size()) {
+        Value *Val = Builder->CreateLoad(getPyValuePtrTy(), State.Names[nameIdx], "global_val");
+        emitPush(State, Val);
+      } else {
+        emitPush(State, ConstantInt::get(getPyValuePtrTy(), 0));
+      }
+    } else {
+      emitPush(State, ConstantInt::get(getPyValuePtrTy(), 0));
+    }
+    break;
+  }
+
+  case Opcode::STORE_GLOBAL: {
+    // Store TOS to a global
+    if (Inst.Arg < State.Names.size()) {
+      Value *Val = emitPop(State);
+      Builder->CreateStore(Val, State.Names[Inst.Arg]);
+    } else {
+      emitPop(State);
+    }
+    break;
+  }
+
+  case Opcode::DELETE_GLOBAL: {
+    // Delete a global (set to None/0)
+    if (Inst.Arg < State.Names.size()) {
+      Builder->CreateStore(ConstantInt::get(getPyValuePtrTy(), 0), State.Names[Inst.Arg]);
     }
     break;
   }
@@ -466,6 +791,37 @@ Error BytecodeCompiler::compileInstruction(const Instruction &Inst,
     // Convert i1 to i64 (0 or 1)
     Value *ResultInt = Builder->CreateZExt(Result, getPyValuePtrTy(), "cmp_result");
     emitPush(State, ResultInt);
+    break;
+  }
+
+  case Opcode::IS_OP: {
+    // Identity comparison (is / is not)
+    // Arg: 0 = is, 1 = is not
+    Value *RHS = emitPop(State);
+    Value *LHS = emitPop(State);
+    Value *IsEqual = Builder->CreateICmpEQ(LHS, RHS, "is_same");
+    if (Inst.Arg == 1) {
+      // is not
+      IsEqual = Builder->CreateNot(IsEqual, "is_not");
+    }
+    Value *Result = Builder->CreateZExt(IsEqual, getPyValuePtrTy(), "is_result");
+    emitPush(State, Result);
+    break;
+  }
+
+  case Opcode::CONTAINS_OP: {
+    // Membership test (in / not in)
+    // For now, just compare for equality (simplified)
+    // Arg: 0 = in, 1 = not in
+    Value *Container = emitPop(State);
+    Value *Item = emitPop(State);
+    // Simplified: just check equality (real impl needs collection support)
+    Value *IsEqual = Builder->CreateICmpEQ(Item, Container, "contains");
+    if (Inst.Arg == 1) {
+      IsEqual = Builder->CreateNot(IsEqual, "not_in");
+    }
+    Value *Result = Builder->CreateZExt(IsEqual, getPyValuePtrTy(), "contains_result");
+    emitPush(State, Result);
     break;
   }
 
@@ -513,6 +869,70 @@ Error BytecodeCompiler::compileInstruction(const Instruction &Inst,
 
     Builder->CreateCondBr(IsTrue, TargetBB, FallThrough);
     Builder->SetInsertPoint(FallThrough);
+    break;
+  }
+
+  case Opcode::POP_JUMP_IF_NOT_NONE: {
+    // Pop TOS, if not None jump to target
+    Value *Val = emitPop(State);
+    Value *IsNotNone = Builder->CreateICmpNE(Val, ConstantInt::get(getPyValuePtrTy(), 0), "is_not_none");
+
+    uint32_t TargetOffset = Inst.Offset + Inst.Arg * 2 + 2;
+
+    BasicBlock *TargetBB = State.JumpTargets.count(TargetOffset)
+                               ? State.JumpTargets[TargetOffset]
+                               : nullptr;
+    if (!TargetBB) {
+      TargetBB = BasicBlock::Create(Ctx, "jump_target", State.Function);
+      State.JumpTargets[TargetOffset] = TargetBB;
+    }
+
+    BasicBlock *FallThrough = BasicBlock::Create(Ctx, "fall_through", State.Function);
+
+    Builder->CreateCondBr(IsNotNone, TargetBB, FallThrough);
+    Builder->SetInsertPoint(FallThrough);
+    break;
+  }
+
+  case Opcode::POP_JUMP_IF_NONE: {
+    // Pop TOS, if None jump to target
+    Value *Val = emitPop(State);
+    Value *IsNone = Builder->CreateICmpEQ(Val, ConstantInt::get(getPyValuePtrTy(), 0), "is_none");
+
+    uint32_t TargetOffset = Inst.Offset + Inst.Arg * 2 + 2;
+
+    BasicBlock *TargetBB = State.JumpTargets.count(TargetOffset)
+                               ? State.JumpTargets[TargetOffset]
+                               : nullptr;
+    if (!TargetBB) {
+      TargetBB = BasicBlock::Create(Ctx, "jump_target", State.Function);
+      State.JumpTargets[TargetOffset] = TargetBB;
+    }
+
+    BasicBlock *FallThrough = BasicBlock::Create(Ctx, "fall_through", State.Function);
+
+    Builder->CreateCondBr(IsNone, TargetBB, FallThrough);
+    Builder->SetInsertPoint(FallThrough);
+    break;
+  }
+
+  case Opcode::JUMP_FORWARD: {
+    // Unconditional forward jump
+    // Target = offset + arg * 2 + 2
+    uint32_t TargetOffset = Inst.Offset + Inst.Arg * 2 + 2;
+
+    BasicBlock *TargetBB = State.JumpTargets.count(TargetOffset)
+                               ? State.JumpTargets[TargetOffset]
+                               : nullptr;
+    if (!TargetBB) {
+      TargetBB = BasicBlock::Create(Ctx, "fwd_target", State.Function);
+      State.JumpTargets[TargetOffset] = TargetBB;
+    }
+
+    Builder->CreateBr(TargetBB);
+    // Create a dead block for any following instructions
+    BasicBlock *DeadBB = BasicBlock::Create(Ctx, "dead", State.Function);
+    Builder->SetInsertPoint(DeadBB);
     break;
   }
 
@@ -590,6 +1010,300 @@ Error BytecodeCompiler::compileInstruction(const Instruction &Inst,
 
     // Continuation: push result (None/0) for both paths
     Builder->SetInsertPoint(ContBB);
+    emitPush(State, ConstantInt::get(getPyValuePtrTy(), 0));
+    break;
+  }
+
+  case Opcode::MAKE_FUNCTION: {
+    // Pop code object (and possibly more based on Arg flags)
+    // Flags: 0x01 = defaults, 0x02 = kwdefaults, 0x04 = annotations, 0x08 = closure
+    if (Inst.Arg & 0x08) emitPop(State); // closure
+    if (Inst.Arg & 0x04) emitPop(State); // annotations
+    if (Inst.Arg & 0x02) emitPop(State); // kwdefaults
+    if (Inst.Arg & 0x01) emitPop(State); // defaults
+    emitPop(State); // code object
+    emitPush(State, ConstantInt::get(getPyValuePtrTy(), 0)); // function placeholder
+    break;
+  }
+
+  case Opcode::CALL_FUNCTION_EX: {
+    // Call with unpacking: pop kwargs if Arg & 1, pop args, pop callable
+    if (Inst.Arg & 0x01) emitPop(State); // kwargs dict
+    emitPop(State); // args tuple
+    emitPop(State); // callable
+    emitPop(State); // NULL
+    emitPush(State, ConstantInt::get(getPyValuePtrTy(), 0)); // result
+    break;
+  }
+
+  case Opcode::KW_NAMES: {
+    // Set keyword names for next CALL - no stack effect
+    break;
+  }
+
+  case Opcode::MAKE_CELL: {
+    // Create a cell for variable at Arg - no stack effect
+    break;
+  }
+
+  case Opcode::LOAD_CLOSURE: {
+    // Load a cell from freevars/cellvars
+    emitPush(State, ConstantInt::get(getPyValuePtrTy(), 0));
+    break;
+  }
+
+  case Opcode::LOAD_DEREF: {
+    // Load value from cell
+    emitPush(State, ConstantInt::get(getPyValuePtrTy(), 0));
+    break;
+  }
+
+  case Opcode::STORE_DEREF: {
+    // Store value into cell
+    emitPop(State);
+    break;
+  }
+
+  case Opcode::DELETE_DEREF: {
+    // Delete value in cell - no stack effect
+    break;
+  }
+
+  case Opcode::COPY_FREE_VARS: {
+    // Copy free variables from function object - no stack effect
+    break;
+  }
+
+  case Opcode::PUSH_EXC_INFO: {
+    // Push exception info - pushes current exception
+    emitPush(State, ConstantInt::get(getPyValuePtrTy(), 0));
+    break;
+  }
+
+  case Opcode::CHECK_EXC_MATCH: {
+    // Check if TOS1 is instance of TOS - pops TOS, pushes bool
+    emitPop(State); // exception type
+    emitPush(State, ConstantInt::get(getPyValuePtrTy(), 0)); // match result
+    break;
+  }
+
+  case Opcode::CHECK_EG_MATCH: {
+    // Check exception group match
+    emitPop(State); // exception type
+    emitPush(State, ConstantInt::get(getPyValuePtrTy(), 0)); // match result
+    break;
+  }
+
+  case Opcode::POP_EXCEPT: {
+    // Pop exception handler - no stack effect beyond cleanup
+    break;
+  }
+
+  case Opcode::RAISE_VARARGS: {
+    // Raise exception with Arg arguments
+    for (uint32_t i = 0; i < Inst.Arg; ++i) {
+      emitPop(State);
+    }
+    // Raise would normally not return, but for stub, just continue
+    break;
+  }
+
+  case Opcode::RERAISE: {
+    // Re-raise active exception
+    break;
+  }
+
+  case Opcode::LOAD_ASSERTION_ERROR: {
+    // Load AssertionError exception type
+    emitPush(State, ConstantInt::get(getPyValuePtrTy(), 0));
+    break;
+  }
+
+  case Opcode::LOAD_BUILD_CLASS: {
+    // Load __build_class__ builtin
+    emitPush(State, ConstantInt::get(getPyValuePtrTy(), 0));
+    break;
+  }
+
+  case Opcode::MATCH_CLASS: {
+    // Pattern match class - complex stack effect
+    // Pop pattern type, push match result
+    emitPop(State); // keyword attribute names
+    emitPop(State); // type to match
+    emitPush(State, ConstantInt::get(getPyValuePtrTy(), 0)); // match result
+    break;
+  }
+
+  case Opcode::IMPORT_NAME: {
+    // Import module: pop fromlist, pop level, push module
+    emitPop(State); // fromlist
+    emitPop(State); // level
+    emitPush(State, ConstantInt::get(getPyValuePtrTy(), 0)); // module
+    break;
+  }
+
+  case Opcode::IMPORT_FROM: {
+    // Import attribute from module: push attribute (TOS is module, kept on stack)
+    emitPush(State, ConstantInt::get(getPyValuePtrTy(), 0));
+    break;
+  }
+
+  case Opcode::RETURN_GENERATOR: {
+    // Return generator object
+    Builder->CreateRet(ConstantInt::get(getPyValuePtrTy(), 0));
+    break;
+  }
+
+  case Opcode::YIELD_VALUE: {
+    // Yield a value from generator
+    emitPop(State); // yielded value
+    emitPush(State, ConstantInt::get(getPyValuePtrTy(), 0)); // sent value placeholder
+    break;
+  }
+
+  case Opcode::SEND: {
+    // Send value to sub-generator
+    // Stack: receiver, value -> result
+    Value *Val = emitPop(State);
+    (void)Val;
+    // Leave receiver on stack, will be popped on StopIteration
+    emitPush(State, ConstantInt::get(getPyValuePtrTy(), 0));
+    break;
+  }
+
+  case Opcode::END_SEND: {
+    // End send - cleanup after SEND
+    emitPop(State); // receiver
+    // value stays on stack
+    break;
+  }
+
+  case Opcode::GET_YIELD_FROM_ITER: {
+    // Get iterator for yield from
+    // Stack: iterable -> iterator (modifies TOS)
+    break;
+  }
+
+  case Opcode::GET_AWAITABLE: {
+    // Get awaitable from value
+    // Stack: obj -> awaitable (modifies TOS)
+    break;
+  }
+
+  case Opcode::GET_AITER: {
+    // Get async iterator
+    Value *Obj = emitPop(State);
+    emitPush(State, Obj); // placeholder
+    break;
+  }
+
+  case Opcode::GET_ANEXT: {
+    // Get next from async iterator
+    emitPush(State, ConstantInt::get(getPyValuePtrTy(), 0));
+    break;
+  }
+
+  case Opcode::BEFORE_ASYNC_WITH: {
+    // Set up async with - push __aenter__ result
+    emitPush(State, ConstantInt::get(getPyValuePtrTy(), 0));
+    break;
+  }
+
+  case Opcode::END_ASYNC_FOR: {
+    // End async for loop
+    emitPop(State); // exception
+    break;
+  }
+
+  case Opcode::BEFORE_WITH: {
+    // Set up with statement - push __exit__, push __enter__ result
+    emitPush(State, ConstantInt::get(getPyValuePtrTy(), 0)); // __exit__
+    emitPush(State, ConstantInt::get(getPyValuePtrTy(), 0)); // __enter__ result
+    break;
+  }
+
+  case Opcode::WITH_EXCEPT_START: {
+    // Call __exit__ with exception
+    emitPush(State, ConstantInt::get(getPyValuePtrTy(), 0)); // __exit__ result
+    break;
+  }
+
+  case Opcode::MATCH_MAPPING: {
+    // Check if TOS is a mapping - push bool
+    emitPush(State, ConstantInt::get(getPyValuePtrTy(), 0));
+    break;
+  }
+
+  case Opcode::MATCH_SEQUENCE: {
+    // Check if TOS is a sequence - push bool
+    emitPush(State, ConstantInt::get(getPyValuePtrTy(), 0));
+    break;
+  }
+
+  case Opcode::MATCH_KEYS: {
+    // Match keys from mapping - push values tuple + bool
+    emitPop(State); // keys tuple
+    emitPush(State, ConstantInt::get(getPyValuePtrTy(), 0)); // values
+    emitPush(State, ConstantInt::get(getPyValuePtrTy(), 0)); // success
+    break;
+  }
+
+  case Opcode::INTERPRETER_EXIT: {
+    // Exit interpreter frame
+    Builder->CreateRet(ConstantInt::get(getPyValuePtrTy(), 0));
+    break;
+  }
+
+  case Opcode::SETUP_ANNOTATIONS: {
+    // Set up __annotations__ dict - no stack effect
+    break;
+  }
+
+  case Opcode::LOAD_LOCALS: {
+    // Push locals dict
+    emitPush(State, ConstantInt::get(getPyValuePtrTy(), 0));
+    break;
+  }
+
+  case Opcode::EXTENDED_ARG: {
+    // Prefix for larger arguments - handled during parsing
+    break;
+  }
+
+  case Opcode::FORMAT_VALUE: {
+    // Format a value for f-string
+    // Flags: 0x03 = conversion, 0x04 = format spec present
+    if (Inst.Arg & 0x04) emitPop(State); // format spec
+    emitPop(State); // value
+    emitPush(State, ConstantInt::get(getPyValuePtrTy(), 0)); // formatted string
+    break;
+  }
+
+  case Opcode::CALL_INTRINSIC_1: {
+    // Call intrinsic with 1 arg
+    emitPop(State);
+    emitPush(State, ConstantInt::get(getPyValuePtrTy(), 0));
+    break;
+  }
+
+  case Opcode::CALL_INTRINSIC_2: {
+    // Call intrinsic with 2 args
+    emitPop(State);
+    emitPop(State);
+    emitPush(State, ConstantInt::get(getPyValuePtrTy(), 0));
+    break;
+  }
+
+  case Opcode::LOAD_FROM_DICT_OR_GLOBALS: {
+    // Load from dict or fall back to globals
+    emitPop(State); // dict
+    emitPush(State, ConstantInt::get(getPyValuePtrTy(), 0));
+    break;
+  }
+
+  case Opcode::LOAD_FROM_DICT_OR_DEREF: {
+    // Load from dict or fall back to cell
+    emitPop(State); // dict
     emitPush(State, ConstantInt::get(getPyValuePtrTy(), 0));
     break;
   }
