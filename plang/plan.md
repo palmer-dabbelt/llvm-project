@@ -1,9 +1,14 @@
-# Plang: Systematic Opcode Testing Plan
+# Plang Development Plan
 
-## Overview
+Plang is a Python bytecode JIT compiler targeting LLVM. This document tracks the development roadmap and current progress.
+
+---
+
+## Phase 1: Systematic Opcode Testing
+
 Create comprehensive test coverage for all Python 3.12+ bytecode opcodes. Each opcode should have at least one test case that verifies it works correctly.
 
-## Current State
+### Current State
 
 **Total Tests: 19 (all passing)**
 
@@ -30,9 +35,9 @@ Create comprehensive test coverage for all Python 3.12+ bytecode opcodes. Each o
 - `store-name.test` - Module-level name storage
 - `global-vars.test` - Module-level variable operations
 
-## Opcode Test Status
+### Opcode Test Status
 
-### Core Opcodes (Well Tested)
+#### Core Opcodes (Well Tested)
 | Opcode | Status | Test File | Notes |
 |--------|--------|-----------|-------|
 | CACHE | ✅ Tested | hello-world.test | Implicitly tested (no-op) |
@@ -44,7 +49,7 @@ Create comprehensive test coverage for all Python 3.12+ bytecode opcodes. Each o
 | POP_TOP | ✅ Tested | compileall-expr.test | Discard value |
 | PUSH_NULL | ✅ Tested | hello-world.test | Used before CALL |
 
-### Variables (Mostly Tested)
+#### Variables (Mostly Tested)
 | Opcode | Status | Notes |
 |--------|--------|-------|
 | LOAD_FAST | ✅ Tested | while-loop.test (x variable) |
@@ -59,7 +64,7 @@ Create comprehensive test coverage for all Python 3.12+ bytecode opcodes. Each o
 | STORE_GLOBAL | ❌ Stub | Functions not yet supported |
 | DELETE_GLOBAL | ❌ Stub | Functions not yet supported |
 
-### Arithmetic & Unary Ops (Well Tested)
+#### Arithmetic & Unary Ops (Well Tested)
 | Opcode | Status | Notes |
 |--------|--------|-------|
 | BINARY_OP (+) | ✅ Tested | arithmetic.test, while-loop.test |
@@ -76,7 +81,7 @@ Create comprehensive test coverage for all Python 3.12+ bytecode opcodes. Each o
 | UNARY_NOT | ✅ Tested | unary-ops.test (not 0, not 1) |
 | UNARY_INVERT | ✅ Tested | unary-ops.test (~5 = -6) |
 
-### Comparison & Jumps (Partially Tested)
+#### Comparison & Jumps (Partially Tested)
 | Opcode | Status | Notes |
 |--------|--------|-------|
 | COMPARE_OP (<) | ✅ Tested | while-loop.test, compare-ops.test |
@@ -95,13 +100,13 @@ Create comprehensive test coverage for all Python 3.12+ bytecode opcodes. Each o
 | JUMP_BACKWARD | ✅ Tested | while-loop.test (loop back) |
 | JUMP_BACKWARD_NO_INTERRUPT | ❌ Untested | |
 
-### Stack Manipulation (Untested)
+#### Stack Manipulation (Untested)
 | Opcode | Status | Notes |
 |--------|--------|-------|
 | COPY | ❌ Untested | Duplicate stack item |
 | SWAP | ❌ Untested | Swap stack items |
 
-### Collections (All Stubs - Untested)
+#### Collections (All Stubs - Untested)
 | Opcode | Status | Notes |
 |--------|--------|-------|
 | BUILD_TUPLE | ❌ Stub | Returns 0 placeholder |
@@ -125,14 +130,14 @@ Create comprehensive test coverage for all Python 3.12+ bytecode opcodes. Each o
 | DICT_UPDATE | ❌ Stub | Dict update |
 | GET_LEN | ❌ Stub | `len()` - returns 0 |
 
-### Iterators (Stubs)
+#### Iterators (Stubs)
 | Opcode | Status | Notes |
 |--------|--------|-------|
 | GET_ITER | ❌ Stub | `iter(x)` - returns x |
 | FOR_ITER | ❌ Stub | Always exhausted immediately |
 | END_FOR | ❌ Stub | Cleanup |
 
-### Attributes (Stubs)
+#### Attributes (Stubs)
 | Opcode | Status | Notes |
 |--------|--------|-------|
 | LOAD_ATTR | ❌ Stub | `x.y` - returns 0 |
@@ -140,7 +145,7 @@ Create comprehensive test coverage for all Python 3.12+ bytecode opcodes. Each o
 | DELETE_ATTR | ❌ Stub | `del x.y` |
 | LOAD_SUPER_ATTR | ❌ Stub | `super().x` |
 
-### Functions & Closures (Stubs)
+#### Functions & Closures (Stubs)
 | Opcode | Status | Notes |
 |--------|--------|-------|
 | CALL | ✅ Tested | hello-world.test (print) |
@@ -154,7 +159,7 @@ Create comprehensive test coverage for all Python 3.12+ bytecode opcodes. Each o
 | DELETE_DEREF | ❌ Stub | Delete cell |
 | COPY_FREE_VARS | ❌ Stub | Copy free vars |
 
-### Exceptions (Stubs)
+#### Exceptions (Stubs)
 | Opcode | Status | Notes |
 |--------|--------|-------|
 | PUSH_EXC_INFO | ❌ Stub | Push exception |
@@ -165,19 +170,19 @@ Create comprehensive test coverage for all Python 3.12+ bytecode opcodes. Each o
 | RERAISE | ❌ Stub | Re-raise |
 | LOAD_ASSERTION_ERROR | ❌ Stub | `assert` |
 
-### Classes (Stubs)
+#### Classes (Stubs)
 | Opcode | Status | Notes |
 |--------|--------|-------|
 | LOAD_BUILD_CLASS | ❌ Stub | `class C:` |
 | MATCH_CLASS | ❌ Stub | Pattern matching |
 
-### Imports (Stubs)
+#### Imports (Stubs)
 | Opcode | Status | Notes |
 |--------|--------|-------|
 | IMPORT_NAME | ❌ Stub | `import x` |
 | IMPORT_FROM | ❌ Stub | `from x import y` |
 
-### Generators/Async (Stubs)
+#### Generators/Async (Stubs)
 | Opcode | Status | Notes |
 |--------|--------|-------|
 | RETURN_GENERATOR | ❌ Stub | Generator function |
@@ -191,20 +196,20 @@ Create comprehensive test coverage for all Python 3.12+ bytecode opcodes. Each o
 | BEFORE_ASYNC_WITH | ❌ Stub | `async with` |
 | END_ASYNC_FOR | ❌ Stub | End async for |
 
-### Context Managers (Stubs)
+#### Context Managers (Stubs)
 | Opcode | Status | Notes |
 |--------|--------|-------|
 | BEFORE_WITH | ❌ Stub | `with x:` |
 | WITH_EXCEPT_START | ❌ Stub | With exception |
 
-### Pattern Matching (Stubs)
+#### Pattern Matching (Stubs)
 | Opcode | Status | Notes |
 |--------|--------|-------|
 | MATCH_MAPPING | ❌ Stub | `case {}:` |
 | MATCH_SEQUENCE | ❌ Stub | `case []:` |
 | MATCH_KEYS | ❌ Stub | Dict pattern keys |
 
-### Other (Stubs/No-ops)
+#### Other (Stubs/No-ops)
 | Opcode | Status | Notes |
 |--------|--------|-------|
 | INTERPRETER_EXIT | ❌ Stub | Exit interpreter |
@@ -217,26 +222,52 @@ Create comprehensive test coverage for all Python 3.12+ bytecode opcodes. Each o
 | LOAD_FROM_DICT_OR_GLOBALS | ❌ Stub | Class body |
 | LOAD_FROM_DICT_OR_DEREF | ❌ Stub | Class body |
 
-## Known Issues
+### Known Issues
 
 1. **COMPARE_OP arg encoding**: The Python 3.12 bytecode uses different arg values than documented. Only `<` (arg=2) is currently working. Other comparison operators need investigation.
 
 2. **MAKE_FUNCTION**: Function definitions don't work yet, preventing tests for STORE_GLOBAL and other function-related features.
 
-## Next Steps
+### Phase 1 Progress
 
-### Immediate (Phase 1 complete)
 - [x] Arithmetic operators (-, *, //, %, &, |, ^, <<)
 - [x] Unary operators (-, not, ~)
 - [x] COMPARE_OP (<)
 - [x] IS_OP
 - [x] JUMP_FORWARD
 - [x] STORE_NAME/LOAD_NAME
+- [ ] Fix COMPARE_OP arg encoding for <=, >, >=, ==, !=
+- [ ] Implement MAKE_FUNCTION for user-defined functions
+- [ ] Implement collections (lists, tuples, dicts)
+- [ ] Implement iterators and for loops
+- [ ] Implement exception handling
+- [ ] Implement classes
 
-### Future Work
-1. Fix COMPARE_OP arg encoding for <=, >, >=, ==, !=
-2. Implement MAKE_FUNCTION for user-defined functions
-3. Implement collections (lists, tuples, dicts)
-4. Implement iterators and for loops
-5. Implement exception handling
-6. Implement classes
+---
+
+## Future Phases
+
+*(To be defined as development progresses)*
+
+### Phase 2: Core Language Features
+- User-defined functions (MAKE_FUNCTION, CALL)
+- Classes and objects
+- Exception handling
+
+### Phase 3: Collections
+- Lists, tuples, dicts, sets
+- Iterators and for loops
+- Comprehensions
+
+### Phase 4: Advanced Features
+- Closures and nested functions
+- Generators and coroutines
+- Context managers
+
+### Phase 5: Standard Library Compatibility
+- Import system
+- Built-in functions
+
+### Phase 6: Performance Optimization
+- JIT optimizations
+- Type specialization
