@@ -41,9 +41,16 @@ public:
   /// Get the name of the entry function for a compiled code object
   static std::string getEntryFunctionName(const CodeObject &Code);
 
+  /// Magic values for callable types
+  static constexpr int64_t BUILTIN_PRINT = -1000000001;
+  static constexpr int64_t USER_FUNC_BASE = -2000000000;
+
 private:
   llvm::LLVMContext &Ctx;
   std::unique_ptr<llvm::IRBuilder<>> Builder;
+
+  /// Map from function index to compiled LLVM function
+  std::map<int64_t, llvm::Function *> CompiledFunctions;
 
   // Type helpers
   llvm::Type *getInt64Ty();

@@ -39,9 +39,6 @@ std::string BytecodeCompiler::getEntryFunctionName(const CodeObject &Code) {
   return "__plang_" + Code.Name + "__";
 }
 
-// Magic value to represent the built-in print function
-static constexpr int64_t BUILTIN_PRINT = -1000000001;
-
 void BytecodeCompiler::declareRuntimeHelpers(Module &M) {
   // Declare runtime helper functions that will be linked at runtime
 
@@ -73,6 +70,31 @@ BytecodeCompiler::compile(const CodeObject &Code, StringRef ModuleName) {
   // Declare runtime helpers
   declareRuntimeHelpers(*M);
 
+  // Clear compiled functions map for this module
+  CompiledFunctions.clear();
+
+  // First pass: scan constants for nested code objects and compile them
+  // This ensures all functions are compiled before we process MAKE_FUNCTION
+  int64_t FuncIndex = 0;
+  for (size_t i = 0; i < Code.Constants.size(); ++i) {
+    const auto &Const = Code.Constants[i];
+    if (Const->getType() == PyObject::Type::Code) {
+      auto NestedCode = Const->getCode();
+      if (NestedCode) {
+        // Create function for nested code object
+        std::string NestedFuncName = getEntryFunctionName(*NestedCode);
+        auto *NestedFuncTy = FunctionType::get(getPyValuePtrTy(), {}, false);
+        auto *NestedFunc = Function::Create(NestedFuncTy, Function::InternalLinkage,
+                                             NestedFuncName, M.get());
+
+        // Track function with tagged value: USER_FUNC_BASE - FuncIndex
+        int64_t FuncId = USER_FUNC_BASE - FuncIndex;
+        CompiledFunctions[FuncId] = NestedFunc;
+        ++FuncIndex;
+      }
+    }
+  }
+
   // Create the entry function
   std::string FuncName = getEntryFunctionName(Code);
   auto *FuncTy = FunctionType::get(getPyValuePtrTy(), {}, false);
@@ -99,6 +121,7 @@ BytecodeCompiler::compile(const CodeObject &Code, StringRef ModuleName) {
   // For strings, we need to register them with the runtime
   auto *RegisterStringFn = M->getFunction("plang_register_string");
   size_t StringIndex = 0;
+  int64_t CodeIndex = 0; // Counter for code objects
 
   for (const auto &Const : Code.Constants) {
     Value *ConstVal = nullptr;
@@ -135,6 +158,13 @@ BytecodeCompiler::compile(const CodeObject &Code, StringRef ModuleName) {
                                           RegisterStringFn, {StrPtr, StrLen});
       // Convert to tagged string value: -(index + 1)
       ConstVal = Builder->CreateNeg(Builder->CreateAdd(StrIdx, ConstantInt::get(getPyValuePtrTy(), 1)));
+      break;
+    }
+    case PyObject::Type::Code: {
+      // Return the function ID for this code object
+      int64_t FuncId = USER_FUNC_BASE - CodeIndex;
+      ConstVal = ConstantInt::get(getPyValuePtrTy(), FuncId);
+      ++CodeIndex;
       break;
     }
     default:
@@ -211,6 +241,133 @@ BytecodeCompiler::compile(const CodeObject &Code, StringRef ModuleName) {
   // If we haven't returned yet, return None (0)
   if (!Builder->GetInsertBlock()->getTerminator()) {
     Builder->CreateRet(ConstantInt::get(getPyValuePtrTy(), 0));
+  }
+
+  // Second pass: compile bodies of all nested code objects
+  int64_t NestedCodeIndex = 0;
+  for (size_t i = 0; i < Code.Constants.size(); ++i) {
+    const auto &Const = Code.Constants[i];
+    if (Const->getType() == PyObject::Type::Code) {
+      auto NestedCode = Const->getCode();
+      if (NestedCode) {
+        int64_t FuncId = USER_FUNC_BASE - NestedCodeIndex;
+        Function *NestedFunc = CompiledFunctions[FuncId];
+
+        // Create entry block for nested function
+        BasicBlock *NestedEntryBB = BasicBlock::Create(Ctx, "entry", NestedFunc);
+        Builder->SetInsertPoint(NestedEntryBB);
+
+        // Initialize state for nested function
+        CompilerState NestedState;
+        NestedState.Function = NestedFunc;
+        NestedState.EntryBB = NestedEntryBB;
+
+        // Allocate runtime stack for nested function
+        size_t NestedStackSize = std::max(static_cast<size_t>(NestedCode->StackSize), size_t{16});
+        NestedState.StackArrayTy = ArrayType::get(getPyValuePtrTy(), NestedStackSize);
+        NestedState.StackBase = Builder->CreateAlloca(NestedState.StackArrayTy, nullptr, "stack");
+        NestedState.StackPtr = Builder->CreateAlloca(Type::getInt64Ty(Ctx), nullptr, "sp");
+        Builder->CreateStore(ConstantInt::get(Type::getInt64Ty(Ctx), 0), NestedState.StackPtr);
+
+        // Pre-load constants for nested function
+        size_t NestedStringIndex = 0;
+        for (const auto &NestedConst : NestedCode->Constants) {
+          Value *ConstVal = nullptr;
+          switch (NestedConst->getType()) {
+          case PyObject::Type::None:
+            ConstVal = ConstantInt::get(getPyValuePtrTy(), 0);
+            break;
+          case PyObject::Type::Bool:
+            ConstVal = ConstantInt::get(getPyValuePtrTy(), NestedConst->getBool() ? 1 : 0);
+            break;
+          case PyObject::Type::Int:
+            ConstVal = ConstantInt::get(getPyValuePtrTy(), NestedConst->getInt());
+            break;
+          case PyObject::Type::Float: {
+            double d = NestedConst->getFloat();
+            uint64_t bits;
+            std::memcpy(&bits, &d, sizeof(bits));
+            ConstVal = ConstantInt::get(getPyValuePtrTy(), bits);
+            break;
+          }
+          case PyObject::Type::String: {
+            std::string Str = NestedConst->getString().str();
+            auto *StrArray = ConstantDataArray::getString(Ctx, Str, true);
+            auto *GV = new GlobalVariable(*M, StrArray->getType(), true,
+                                          GlobalValue::PrivateLinkage, StrArray,
+                                          "nested_str_" + std::to_string(NestedStringIndex++));
+            auto *StrPtr = Builder->CreateBitCast(GV, PointerType::get(Ctx, 0));
+            auto *StrLen = ConstantInt::get(Type::getInt64Ty(Ctx), Str.size());
+            Value *StrIdx = Builder->CreateCall(RegisterStringFn->getFunctionType(),
+                                                RegisterStringFn, {StrPtr, StrLen});
+            ConstVal = Builder->CreateNeg(Builder->CreateAdd(StrIdx, ConstantInt::get(getPyValuePtrTy(), 1)));
+            break;
+          }
+          default:
+            ConstVal = ConstantInt::get(getPyValuePtrTy(), 0);
+            break;
+          }
+          NestedState.Constants.push_back(ConstVal);
+        }
+
+        // Allocate locals for nested function
+        for (size_t j = 0; j < NestedCode->NumLocals; ++j) {
+          auto *Alloca = Builder->CreateAlloca(getPyValuePtrTy(), nullptr,
+                                                "local_" + std::to_string(j));
+          Builder->CreateStore(ConstantInt::get(getPyValuePtrTy(), 0), Alloca);
+          NestedState.Locals.push_back(Alloca);
+        }
+
+        // Parse and compile nested function instructions
+        auto NestedInstructionsOrErr = NestedCode->parseInstructions();
+        if (!NestedInstructionsOrErr)
+          return NestedInstructionsOrErr.takeError();
+
+        auto &NestedInstructions = *NestedInstructionsOrErr;
+
+        // Pre-scan for jump targets
+        std::set<uint32_t> NestedJumpTargetOffsets;
+        for (const auto &Inst : NestedInstructions) {
+          if (opcodeIsJump(Inst.Op)) {
+            uint32_t TargetOffset = 0;
+            if (Inst.Op == Opcode::JUMP_BACKWARD ||
+                Inst.Op == Opcode::JUMP_BACKWARD_NO_INTERRUPT) {
+              TargetOffset = Inst.Offset + 2 - Inst.Arg * 2;
+            } else {
+              TargetOffset = Inst.Offset + Inst.Arg * 2 + 2;
+            }
+            NestedJumpTargetOffsets.insert(TargetOffset);
+          }
+        }
+
+        // Create basic blocks for jump targets
+        for (uint32_t Offset : NestedJumpTargetOffsets) {
+          NestedState.JumpTargets[Offset] =
+              BasicBlock::Create(Ctx, "bb_" + std::to_string(Offset), NestedFunc);
+        }
+
+        // Compile nested function instructions
+        for (const auto &Inst : NestedInstructions) {
+          if (NestedState.JumpTargets.count(Inst.Offset)) {
+            BasicBlock *TargetBB = NestedState.JumpTargets[Inst.Offset];
+            if (!Builder->GetInsertBlock()->getTerminator()) {
+              Builder->CreateBr(TargetBB);
+            }
+            Builder->SetInsertPoint(TargetBB);
+          }
+
+          if (auto Err = compileInstruction(Inst, NestedState, *NestedCode))
+            return std::move(Err);
+        }
+
+        // Add return if needed
+        if (!Builder->GetInsertBlock()->getTerminator()) {
+          Builder->CreateRet(ConstantInt::get(getPyValuePtrTy(), 0));
+        }
+
+        ++NestedCodeIndex;
+      }
+    }
   }
 
   // Verify the module
@@ -983,34 +1140,78 @@ Error BytecodeCompiler::compileInstruction(const Instruction &Inst,
     // Pop the NULL that was pushed by PUSH_NULL
     emitPop(State);
 
-    // Generate runtime check for print built-in
-    // Compare callable to BUILTIN_PRINT constant
+    // Generate runtime dispatch for callable
+    Function *F = Builder->GetInsertBlock()->getParent();
+    Module *M = F->getParent();
+    BasicBlock *ContBB = BasicBlock::Create(Ctx, "call_cont", F);
+
+    // Alloca to store result from any branch
+    Value *ResultSlot = Builder->CreateAlloca(getPyValuePtrTy(), nullptr, "call_result");
+    Builder->CreateStore(ConstantInt::get(getPyValuePtrTy(), 0), ResultSlot);
+
+    // Check for print built-in first
     Value *IsPrint = Builder->CreateICmpEQ(
         Callable, ConstantInt::get(getPyValuePtrTy(), BUILTIN_PRINT), "is_print");
 
-    // Create basic blocks for conditional execution
-    Function *F = Builder->GetInsertBlock()->getParent();
     BasicBlock *PrintBB = BasicBlock::Create(Ctx, "call_print", F);
-    BasicBlock *UnknownBB = BasicBlock::Create(Ctx, "call_unknown", F);
-    BasicBlock *ContBB = BasicBlock::Create(Ctx, "call_cont", F);
+    BasicBlock *CheckUserFuncBB = BasicBlock::Create(Ctx, "check_user_func", F);
 
-    Builder->CreateCondBr(IsPrint, PrintBB, UnknownBB);
+    Builder->CreateCondBr(IsPrint, PrintBB, CheckUserFuncBB);
 
     // Print branch: call plang_print
     Builder->SetInsertPoint(PrintBB);
     if (!Args.empty()) {
-      auto *PrintFn = Builder->GetInsertBlock()->getModule()->getFunction("plang_print");
+      auto *PrintFn = M->getFunction("plang_print");
       Builder->CreateCall(PrintFn->getFunctionType(), PrintFn, {Args[0]});
     }
+    Builder->CreateBr(ContBB);
+
+    // Check for user functions
+    Builder->SetInsertPoint(CheckUserFuncBB);
+
+    // Check if callable is a user function (value <= USER_FUNC_BASE)
+    Value *IsUserFunc = Builder->CreateICmpSLE(
+        Callable, ConstantInt::get(getPyValuePtrTy(), USER_FUNC_BASE), "is_user_func");
+
+    BasicBlock *UserFuncBB = BasicBlock::Create(Ctx, "call_user_func", F);
+    BasicBlock *UnknownBB = BasicBlock::Create(Ctx, "call_unknown", F);
+
+    Builder->CreateCondBr(IsUserFunc, UserFuncBB, UnknownBB);
+
+    // User function branch: dispatch to the correct function
+    Builder->SetInsertPoint(UserFuncBB);
+
+    // For each compiled user function, generate a comparison and call
+    BasicBlock *CurrentBB = UserFuncBB;
+    for (auto &[FuncId, CompiledFunc] : CompiledFunctions) {
+      BasicBlock *CallFuncBB = BasicBlock::Create(Ctx, "call_func_" + std::to_string(-FuncId), F);
+      BasicBlock *NextCheckBB = BasicBlock::Create(Ctx, "next_check", F);
+
+      Value *IsThisFunc = Builder->CreateICmpEQ(
+          Callable, ConstantInt::get(getPyValuePtrTy(), FuncId), "is_func");
+      Builder->CreateCondBr(IsThisFunc, CallFuncBB, NextCheckBB);
+
+      // Call this specific function
+      Builder->SetInsertPoint(CallFuncBB);
+      Value *FuncResult = Builder->CreateCall(CompiledFunc->getFunctionType(), CompiledFunc, {});
+      Builder->CreateStore(FuncResult, ResultSlot);
+      Builder->CreateBr(ContBB);
+
+      // Continue checking
+      Builder->SetInsertPoint(NextCheckBB);
+      CurrentBB = NextCheckBB;
+    }
+    // If no match found, branch to continuation
     Builder->CreateBr(ContBB);
 
     // Unknown callable branch: do nothing
     Builder->SetInsertPoint(UnknownBB);
     Builder->CreateBr(ContBB);
 
-    // Continuation: push result (None/0) for both paths
+    // Continuation: load and push result
     Builder->SetInsertPoint(ContBB);
-    emitPush(State, ConstantInt::get(getPyValuePtrTy(), 0));
+    Value *Result = Builder->CreateLoad(getPyValuePtrTy(), ResultSlot, "call_result_val");
+    emitPush(State, Result);
     break;
   }
 
@@ -1021,8 +1222,9 @@ Error BytecodeCompiler::compileInstruction(const Instruction &Inst,
     if (Inst.Arg & 0x04) emitPop(State); // annotations
     if (Inst.Arg & 0x02) emitPop(State); // kwdefaults
     if (Inst.Arg & 0x01) emitPop(State); // defaults
-    emitPop(State); // code object
-    emitPush(State, ConstantInt::get(getPyValuePtrTy(), 0)); // function placeholder
+    // Code object is on top - it contains the function ID, pass it through
+    Value *CodeObj = emitPop(State);
+    emitPush(State, CodeObj); // function reference (the function ID)
     break;
   }
 

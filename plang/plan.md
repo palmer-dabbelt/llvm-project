@@ -8,240 +8,181 @@ Plang is a Python bytecode JIT compiler targeting LLVM. This document tracks the
 
 Create comprehensive test coverage for all Python 3.12+ bytecode opcodes. Each opcode should have at least one test case that verifies it works correctly.
 
-### Current State
+### Tested Opcodes
 
-**Total Tests: 19 (all passing)**
+| Opcode | Test File |
+|--------|-----------|
+| LOAD_CONST | Various tests |
+| LOAD_FAST / STORE_FAST | delete-fast.test |
+| LOAD_NAME / STORE_NAME | store-name.test, global-vars.test |
+| DELETE_FAST | delete-fast.test |
+| BINARY_OP (+, -, *, //, %) | arithmetic.test, binary-*.test |
+| BINARY_OP (&, \|, ^, <<, >>) | binary-bitwise.test |
+| UNARY_NEGATIVE / UNARY_NOT / UNARY_INVERT | unary-ops.test |
+| COMPARE_OP (<) | compare-ops.test |
+| IS_OP | is-op.test |
+| POP_JUMP_IF_FALSE | if-else.test |
+| JUMP_BACKWARD | while-loop.test |
+| RETURN_VALUE | All tests |
+| CALL | delete-fast.test (user functions), hello-world.test (print) |
+| MAKE_FUNCTION | delete-fast.test (basic no-arg) |
+| PUSH_NULL | hello-world.test |
 
-**Original Tests (7):**
-- `pass.py.test` - Empty module execution
-- `fail.py.test` - Failure case
-- `compileall-simple.test` - Empty module via compileall
-- `compileall-expr.test` - Expression evaluation
-- `arithmetic.test` - Constant folding (1+2+3=6)
-- `hello-world.test` - print() function call
-- `while-loop.test` - While loop with COMPARE_OP and jumps
+### Untested Opcodes
 
-**New Tests (12):**
-- `binary-sub.test` - Subtraction (10 - 3 = 7)
-- `binary-mul.test` - Multiplication (6 * 7 = 42)
-- `binary-div.test` - Division (15 // 3 = 5)
-- `binary-floordiv.test` - Floor division (10 // 3 = 3)
-- `binary-mod.test` - Modulo (10 % 3 = 1)
-- `binary-bitwise.test` - Bitwise &, |, ^, << operations
-- `unary-ops.test` - Negation, not, bitwise invert (~)
-- `compare-ops.test` - Less-than comparison (<)
-- `if-else.test` - If-else control flow with JUMP_FORWARD
-- `is-op.test` - Identity operators (is, is not)
-- `store-name.test` - Module-level name storage
-- `global-vars.test` - Module-level variable operations
+#### Variables
+| Opcode | Notes |
+|--------|-------|
+| LOAD_FAST_CHECK | Used for possibly unbound locals |
+| LOAD_FAST_AND_CLEAR | Used in comprehensions |
+| DELETE_NAME | Module-level deletion |
+| STORE_GLOBAL | Requires MAKE_FUNCTION |
+| DELETE_GLOBAL | Requires MAKE_FUNCTION |
 
-### Opcode Test Status
+#### Arithmetic
+| Opcode | Notes |
+|--------|-------|
+| BINARY_OP (/) | True division - currently stubbed to use // |
 
-#### Core Opcodes (Well Tested)
-| Opcode | Status | Test File | Notes |
-|--------|--------|-----------|-------|
-| CACHE | ✅ Tested | hello-world.test | Implicitly tested (no-op) |
-| NOP | ✅ Tested | * | Implicitly tested (no-op) |
-| RESUME | ✅ Tested | hello-world.test | Entry point opcode |
-| LOAD_CONST | ✅ Tested | arithmetic.test | Load constants |
-| RETURN_VALUE | ✅ Tested | arithmetic.test | Return from function |
-| RETURN_CONST | ✅ Tested | compileall-simple.test | Return constant directly |
-| POP_TOP | ✅ Tested | compileall-expr.test | Discard value |
-| PUSH_NULL | ✅ Tested | hello-world.test | Used before CALL |
+#### Comparison & Jumps
+| Opcode | Notes |
+|--------|-------|
+| COMPARE_OP (<=) | Arg encoding needs investigation |
+| COMPARE_OP (>) | Arg encoding needs investigation |
+| COMPARE_OP (>=) | Arg encoding needs investigation |
+| COMPARE_OP (==) | Arg encoding needs investigation |
+| COMPARE_OP (!=) | Arg encoding needs investigation |
+| CONTAINS_OP | `x in y`, `x not in y` |
+| POP_JUMP_IF_TRUE | |
+| POP_JUMP_IF_NONE | |
+| POP_JUMP_IF_NOT_NONE | |
+| JUMP_BACKWARD_NO_INTERRUPT | |
 
-#### Variables (Mostly Tested)
-| Opcode | Status | Notes |
-|--------|--------|-------|
-| LOAD_FAST | ✅ Tested | while-loop.test (x variable) |
-| STORE_FAST | ✅ Tested | while-loop.test (x = ...) |
-| DELETE_FAST | ❌ Untested | Needs test: `del x` in function |
-| LOAD_FAST_CHECK | ❌ Untested | Used for possibly unbound locals |
-| LOAD_FAST_AND_CLEAR | ❌ Untested | Used in comprehensions |
-| LOAD_NAME | ✅ Tested | hello-world.test (print), store-name.test |
-| STORE_NAME | ✅ Tested | store-name.test, global-vars.test |
-| DELETE_NAME | ❌ Untested | Module-level deletion |
-| LOAD_GLOBAL | ✅ Tested | Implicitly via LOAD_NAME for builtins |
-| STORE_GLOBAL | ❌ Stub | Functions not yet supported |
-| DELETE_GLOBAL | ❌ Stub | Functions not yet supported |
+#### Stack Manipulation
+| Opcode | Notes |
+|--------|-------|
+| COPY | Duplicate stack item |
+| SWAP | Swap stack items |
 
-#### Arithmetic & Unary Ops (Well Tested)
-| Opcode | Status | Notes |
-|--------|--------|-------|
-| BINARY_OP (+) | ✅ Tested | arithmetic.test, while-loop.test |
-| BINARY_OP (-) | ✅ Tested | binary-sub.test |
-| BINARY_OP (*) | ✅ Tested | binary-mul.test |
-| BINARY_OP (/) | ⚠️ Partial | binary-div.test uses // (true division stub) |
-| BINARY_OP (//) | ✅ Tested | binary-floordiv.test |
-| BINARY_OP (%) | ✅ Tested | binary-mod.test |
-| BINARY_OP (&) | ✅ Tested | binary-bitwise.test |
-| BINARY_OP (\|) | ✅ Tested | binary-bitwise.test |
-| BINARY_OP (^) | ✅ Tested | binary-bitwise.test |
-| BINARY_OP (<<) | ✅ Tested | binary-bitwise.test |
-| UNARY_NEGATIVE | ✅ Tested | unary-ops.test (-x) |
-| UNARY_NOT | ✅ Tested | unary-ops.test (not 0, not 1) |
-| UNARY_INVERT | ✅ Tested | unary-ops.test (~5 = -6) |
-
-#### Comparison & Jumps (Partially Tested)
-| Opcode | Status | Notes |
-|--------|--------|-------|
-| COMPARE_OP (<) | ✅ Tested | while-loop.test, compare-ops.test |
-| COMPARE_OP (<=) | ⚠️ Untested | Arg encoding may differ |
-| COMPARE_OP (>) | ⚠️ Untested | Arg encoding may differ |
-| COMPARE_OP (>=) | ⚠️ Untested | Arg encoding may differ |
-| COMPARE_OP (==) | ⚠️ Untested | Arg encoding may differ |
-| COMPARE_OP (!=) | ⚠️ Untested | Arg encoding may differ |
-| IS_OP | ✅ Tested | is-op.test |
-| CONTAINS_OP | ❌ Untested | `x in y`, `x not in y` |
-| POP_JUMP_IF_FALSE | ✅ Tested | while-loop.test, if-else.test |
-| POP_JUMP_IF_TRUE | ❌ Untested | |
-| POP_JUMP_IF_NONE | ❌ Untested | |
-| POP_JUMP_IF_NOT_NONE | ❌ Untested | |
-| JUMP_FORWARD | ✅ Tested | if-else.test |
-| JUMP_BACKWARD | ✅ Tested | while-loop.test (loop back) |
-| JUMP_BACKWARD_NO_INTERRUPT | ❌ Untested | |
-
-#### Stack Manipulation (Untested)
-| Opcode | Status | Notes |
-|--------|--------|-------|
-| COPY | ❌ Untested | Duplicate stack item |
-| SWAP | ❌ Untested | Swap stack items |
-
-#### Collections (All Stubs - Untested)
-| Opcode | Status | Notes |
-|--------|--------|-------|
-| BUILD_TUPLE | ❌ Stub | Returns 0 placeholder |
-| BUILD_LIST | ❌ Stub | Returns 0 placeholder |
-| BUILD_SET | ❌ Stub | Returns 0 placeholder |
-| BUILD_MAP | ❌ Stub | Returns 0 placeholder |
-| BUILD_CONST_KEY_MAP | ❌ Stub | Returns 0 placeholder |
-| BUILD_STRING | ❌ Stub | Returns 0 placeholder |
-| BUILD_SLICE | ❌ Stub | Returns 0 placeholder |
-| UNPACK_SEQUENCE | ❌ Stub | Returns 0 placeholder |
-| UNPACK_EX | ❌ Stub | Returns 0 placeholder |
-| BINARY_SUBSCR | ❌ Stub | `x[y]` - returns 0 |
-| STORE_SUBSCR | ❌ Stub | `x[y] = z` |
-| DELETE_SUBSCR | ❌ Stub | `del x[y]` |
-| LIST_APPEND | ❌ Stub | List comprehensions |
-| SET_ADD | ❌ Stub | Set comprehensions |
-| MAP_ADD | ❌ Stub | Dict comprehensions |
-| LIST_EXTEND | ❌ Stub | `[*x, ...]` |
-| SET_UPDATE | ❌ Stub | `{*x, ...}` |
-| DICT_MERGE | ❌ Stub | `{**x, ...}` |
-| DICT_UPDATE | ❌ Stub | Dict update |
-| GET_LEN | ❌ Stub | `len()` - returns 0 |
+#### Collections (All Stubs)
+| Opcode | Notes |
+|--------|-------|
+| BUILD_TUPLE | Returns 0 placeholder |
+| BUILD_LIST | Returns 0 placeholder |
+| BUILD_SET | Returns 0 placeholder |
+| BUILD_MAP | Returns 0 placeholder |
+| BUILD_CONST_KEY_MAP | Returns 0 placeholder |
+| BUILD_STRING | Returns 0 placeholder |
+| BUILD_SLICE | Returns 0 placeholder |
+| UNPACK_SEQUENCE | Returns 0 placeholder |
+| UNPACK_EX | Returns 0 placeholder |
+| BINARY_SUBSCR | `x[y]` - returns 0 |
+| STORE_SUBSCR | `x[y] = z` |
+| DELETE_SUBSCR | `del x[y]` |
+| LIST_APPEND | List comprehensions |
+| SET_ADD | Set comprehensions |
+| MAP_ADD | Dict comprehensions |
+| LIST_EXTEND | `[*x, ...]` |
+| SET_UPDATE | `{*x, ...}` |
+| DICT_MERGE | `{**x, ...}` |
+| DICT_UPDATE | Dict update |
+| GET_LEN | `len()` - returns 0 |
 
 #### Iterators (Stubs)
-| Opcode | Status | Notes |
-|--------|--------|-------|
-| GET_ITER | ❌ Stub | `iter(x)` - returns x |
-| FOR_ITER | ❌ Stub | Always exhausted immediately |
-| END_FOR | ❌ Stub | Cleanup |
+| Opcode | Notes |
+|--------|-------|
+| GET_ITER | `iter(x)` - returns x |
+| FOR_ITER | Always exhausted immediately |
+| END_FOR | Cleanup |
 
 #### Attributes (Stubs)
-| Opcode | Status | Notes |
-|--------|--------|-------|
-| LOAD_ATTR | ❌ Stub | `x.y` - returns 0 |
-| STORE_ATTR | ❌ Stub | `x.y = z` |
-| DELETE_ATTR | ❌ Stub | `del x.y` |
-| LOAD_SUPER_ATTR | ❌ Stub | `super().x` |
+| Opcode | Notes |
+|--------|-------|
+| LOAD_ATTR | `x.y` - returns 0 |
+| STORE_ATTR | `x.y = z` |
+| DELETE_ATTR | `del x.y` |
+| LOAD_SUPER_ATTR | `super().x` |
 
 #### Functions & Closures (Stubs)
-| Opcode | Status | Notes |
-|--------|--------|-------|
-| CALL | ✅ Tested | hello-world.test (print) |
-| MAKE_FUNCTION | ❌ Stub | `def f(): ...` |
-| CALL_FUNCTION_EX | ❌ Stub | `f(*args, **kwargs)` |
-| KW_NAMES | ❌ Stub | Keyword arguments |
-| MAKE_CELL | ❌ Stub | Closures |
-| LOAD_CLOSURE | ❌ Stub | Load cell |
-| LOAD_DEREF | ❌ Stub | Load from cell |
-| STORE_DEREF | ❌ Stub | Store to cell |
-| DELETE_DEREF | ❌ Stub | Delete cell |
-| COPY_FREE_VARS | ❌ Stub | Copy free vars |
+| Opcode | Notes |
+|--------|-------|
+| MAKE_FUNCTION | Basic no-arg functions work; defaults/annotations/closures not supported |
+| CALL_FUNCTION_EX | `f(*args, **kwargs)` |
+| KW_NAMES | Keyword arguments |
+| MAKE_CELL | Closures |
+| LOAD_CLOSURE | Load cell |
+| LOAD_DEREF | Load from cell |
+| STORE_DEREF | Store to cell |
+| DELETE_DEREF | Delete cell |
+| COPY_FREE_VARS | Copy free vars |
 
 #### Exceptions (Stubs)
-| Opcode | Status | Notes |
-|--------|--------|-------|
-| PUSH_EXC_INFO | ❌ Stub | Push exception |
-| CHECK_EXC_MATCH | ❌ Stub | `except E:` |
-| CHECK_EG_MATCH | ❌ Stub | Exception groups |
-| POP_EXCEPT | ❌ Stub | End except block |
-| RAISE_VARARGS | ❌ Stub | `raise` |
-| RERAISE | ❌ Stub | Re-raise |
-| LOAD_ASSERTION_ERROR | ❌ Stub | `assert` |
+| Opcode | Notes |
+|--------|-------|
+| PUSH_EXC_INFO | Push exception |
+| CHECK_EXC_MATCH | `except E:` |
+| CHECK_EG_MATCH | Exception groups |
+| POP_EXCEPT | End except block |
+| RAISE_VARARGS | `raise` |
+| RERAISE | Re-raise |
+| LOAD_ASSERTION_ERROR | `assert` |
 
 #### Classes (Stubs)
-| Opcode | Status | Notes |
-|--------|--------|-------|
-| LOAD_BUILD_CLASS | ❌ Stub | `class C:` |
-| MATCH_CLASS | ❌ Stub | Pattern matching |
+| Opcode | Notes |
+|--------|-------|
+| LOAD_BUILD_CLASS | `class C:` |
+| MATCH_CLASS | Pattern matching |
 
 #### Imports (Stubs)
-| Opcode | Status | Notes |
-|--------|--------|-------|
-| IMPORT_NAME | ❌ Stub | `import x` |
-| IMPORT_FROM | ❌ Stub | `from x import y` |
+| Opcode | Notes |
+|--------|-------|
+| IMPORT_NAME | `import x` |
+| IMPORT_FROM | `from x import y` |
 
 #### Generators/Async (Stubs)
-| Opcode | Status | Notes |
-|--------|--------|-------|
-| RETURN_GENERATOR | ❌ Stub | Generator function |
-| YIELD_VALUE | ❌ Stub | `yield x` |
-| SEND | ❌ Stub | `.send()` |
-| END_SEND | ❌ Stub | End send |
-| GET_YIELD_FROM_ITER | ❌ Stub | `yield from` |
-| GET_AWAITABLE | ❌ Stub | `await` |
-| GET_AITER | ❌ Stub | `async for` |
-| GET_ANEXT | ❌ Stub | Async iterator |
-| BEFORE_ASYNC_WITH | ❌ Stub | `async with` |
-| END_ASYNC_FOR | ❌ Stub | End async for |
+| Opcode | Notes |
+|--------|-------|
+| RETURN_GENERATOR | Generator function |
+| YIELD_VALUE | `yield x` |
+| SEND | `.send()` |
+| END_SEND | End send |
+| GET_YIELD_FROM_ITER | `yield from` |
+| GET_AWAITABLE | `await` |
+| GET_AITER | `async for` |
+| GET_ANEXT | Async iterator |
+| BEFORE_ASYNC_WITH | `async with` |
+| END_ASYNC_FOR | End async for |
 
 #### Context Managers (Stubs)
-| Opcode | Status | Notes |
-|--------|--------|-------|
-| BEFORE_WITH | ❌ Stub | `with x:` |
-| WITH_EXCEPT_START | ❌ Stub | With exception |
+| Opcode | Notes |
+|--------|-------|
+| BEFORE_WITH | `with x:` |
+| WITH_EXCEPT_START | With exception |
 
 #### Pattern Matching (Stubs)
-| Opcode | Status | Notes |
-|--------|--------|-------|
-| MATCH_MAPPING | ❌ Stub | `case {}:` |
-| MATCH_SEQUENCE | ❌ Stub | `case []:` |
-| MATCH_KEYS | ❌ Stub | Dict pattern keys |
+| Opcode | Notes |
+|--------|-------|
+| MATCH_MAPPING | `case {}:` |
+| MATCH_SEQUENCE | `case []:` |
+| MATCH_KEYS | Dict pattern keys |
 
-#### Other (Stubs/No-ops)
-| Opcode | Status | Notes |
-|--------|--------|-------|
-| INTERPRETER_EXIT | ❌ Stub | Exit interpreter |
-| SETUP_ANNOTATIONS | ❌ Stub | Annotations |
-| LOAD_LOCALS | ❌ Stub | `locals()` |
-| EXTENDED_ARG | ✅ N/A | Handled in parser |
-| FORMAT_VALUE | ❌ Stub | f-strings |
-| CALL_INTRINSIC_1 | ❌ Stub | Internal |
-| CALL_INTRINSIC_2 | ❌ Stub | Internal |
-| LOAD_FROM_DICT_OR_GLOBALS | ❌ Stub | Class body |
-| LOAD_FROM_DICT_OR_DEREF | ❌ Stub | Class body |
+#### Other (Stubs)
+| Opcode | Notes |
+|--------|-------|
+| INTERPRETER_EXIT | Exit interpreter |
+| SETUP_ANNOTATIONS | Annotations |
+| LOAD_LOCALS | `locals()` |
+| FORMAT_VALUE | f-strings |
+| CALL_INTRINSIC_1 | Internal |
+| CALL_INTRINSIC_2 | Internal |
+| LOAD_FROM_DICT_OR_GLOBALS | Class body |
+| LOAD_FROM_DICT_OR_DEREF | Class body |
 
 ### Known Issues
 
-1. **COMPARE_OP arg encoding**: The Python 3.12 bytecode uses different arg values than documented. Only `<` (arg=2) is currently working. Other comparison operators need investigation.
+1. **COMPARE_OP arg encoding**: Python 3.12 bytecode uses different arg values than documented. Only `<` (arg=2) is currently working.
 
-2. **MAKE_FUNCTION**: Function definitions don't work yet, preventing tests for STORE_GLOBAL and other function-related features.
-
-### Phase 1 Progress
-
-- [x] Arithmetic operators (-, *, //, %, &, |, ^, <<)
-- [x] Unary operators (-, not, ~)
-- [x] COMPARE_OP (<)
-- [x] IS_OP
-- [x] JUMP_FORWARD
-- [x] STORE_NAME/LOAD_NAME
-- [ ] Fix COMPARE_OP arg encoding for <=, >, >=, ==, !=
-- [ ] Implement MAKE_FUNCTION for user-defined functions
-- [ ] Implement collections (lists, tuples, dicts)
-- [ ] Implement iterators and for loops
-- [ ] Implement exception handling
-- [ ] Implement classes
+2. **MAKE_FUNCTION**: Basic no-arg function calls now work. Functions with default arguments, annotations, keyword-only defaults, and closures are not yet supported.
 
 ---
 
